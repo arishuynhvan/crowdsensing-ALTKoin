@@ -7,9 +7,9 @@ import "@openzeppelin/contracts/utils/ReentrancyGuard.sol";
 contract PublicService is AccessControl, ReentrancyGuard {
     bytes32 public constant ADMIN_ROLE = keccak256("ADMIN_ROLE");
 
-    uint256 public constant STAKE_AMOUNT = 0.05 ether;
-    uint256 public constant REPORT_FEE = 0.001 ether;
-    uint256 public constant REWARD_AMOUNT = 0.0001 ether;
+    uint256 public STAKE_AMOUNT;
+    uint256 public REPORT_FEE;
+    uint256 public REWARD_AMOUNT;
 
     enum Status { Submitted, Approved, Rejected }
 
@@ -40,6 +40,12 @@ contract PublicService is AccessControl, ReentrancyGuard {
     event StakeUpdated(address indexed citizen, uint256 newStake, string reason);
     event AccountLocked(address indexed citizen);
     event AccountUnlocked(address indexed citizen);
+    event EconomicParamsUpdated(
+        uint256 stakeAmount,
+        uint256 reportFee,
+        uint256 rewardAmount,
+        address indexed updatedBy
+    );
 
     error AlreadyRegistered();
     error NotRegistered();
@@ -48,9 +54,35 @@ contract PublicService is AccessControl, ReentrancyGuard {
     error AlreadyVoted();
     error CannotUpdateReport();
     error CitizenLockedError();
+    error InvalidEconomicParams();
 
     constructor() {
         _grantRole(ADMIN_ROLE, msg.sender);
+        _setEconomicParams(0.00002 ether, 0.000007 ether, 0.000001 ether);
+    }
+
+    function _setEconomicParams(uint256 stakeAmount, uint256 reportFee, uint256 rewardAmount) internal {
+        if (stakeAmount == 0 || reportFee == 0 || rewardAmount == 0) revert InvalidEconomicParams();
+        STAKE_AMOUNT = stakeAmount;
+        REPORT_FEE = reportFee;
+        REWARD_AMOUNT = rewardAmount;
+        emit EconomicParamsUpdated(stakeAmount, reportFee, rewardAmount, msg.sender);
+    }
+
+    function setEconomicParams(uint256 stakeAmount, uint256 reportFee, uint256 rewardAmount) external onlyRole(ADMIN_ROLE) {
+        _setEconomicParams(stakeAmount, reportFee, rewardAmount);
+    }
+
+    function setStakeAmount(uint256 stakeAmount) external onlyRole(ADMIN_ROLE) {
+        _setEconomicParams(stakeAmount, REPORT_FEE, REWARD_AMOUNT);
+    }
+
+    function setReportFee(uint256 reportFee) external onlyRole(ADMIN_ROLE) {
+        _setEconomicParams(STAKE_AMOUNT, reportFee, REWARD_AMOUNT);
+    }
+
+    function setRewardAmount(uint256 rewardAmount) external onlyRole(ADMIN_ROLE) {
+        _setEconomicParams(STAKE_AMOUNT, REPORT_FEE, rewardAmount);
     }
 
     function registerCitizen() external payable {

@@ -144,6 +144,22 @@ Tx10: Admin approve/reject → payouts
 ```
 
 ## 8. Deployed Contract
+###### Old
 Deploying contracts with the account: 0x4570FDbd50e25C1E80836e73099b4f7BFABDEbd6
 PublicService deployed to: 0x1f7c6EAa4D0777Bcc1764Af9157721254aF1D313
 Verify on Sepolia Etherscan: https://sepolia.etherscan.io/address/0x1f7c6EAa4D0777Bcc1764Af9157721254aF1D313
+
+###### New
+Hardhat Ignition 🚀
+
+Deploying [ PublicServiceModule ]
+
+Batch #1
+  Executed PublicServiceModule#PublicService
+
+[ PublicServiceModule ] successfully deployed 🚀
+
+Deployed Addresses
+
+PublicServiceModule#PublicService - 0xE1125a60CD4EdE61c0F21f9172d3a5eC67Ed10d2
+https://sepolia.etherscan.io/address/0xE1125a60CD4EdE61c0F21f9172d3a5eC67Ed10d2#code

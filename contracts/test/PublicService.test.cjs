@@ -10,9 +10,77 @@ describe("PublicService", function () {
         return { publicService, admin, citizen1, citizen2, citizen3, otherAccounts };
     }
 
-    const STAKE_AMOUNT = ethers.parseEther("0.05");
-    const REPORT_FEE = ethers.parseEther("0.001");
-    const REWARD_AMOUNT = ethers.parseEther("0.0001");
+    const STAKE_AMOUNT = ethers.parseEther("0.00002");
+    const REPORT_FEE = ethers.parseEther("0.000007");
+    const REWARD_AMOUNT = ethers.parseEther("0.000001");
+    const UPDATED_STAKE_AMOUNT = ethers.parseEther("0.00003");
+    const UPDATED_REPORT_FEE = ethers.parseEther("0.000009");
+    const UPDATED_REWARD_AMOUNT = ethers.parseEther("0.000002");
+
+    describe("F2: Dynamic Economic Params", function () {
+        it("Should initialize with default economic params", async function () {
+            const { publicService } = await loadFixture(deployPublicServiceFixture);
+            expect(await publicService.STAKE_AMOUNT()).to.equal(STAKE_AMOUNT);
+            expect(await publicService.REPORT_FEE()).to.equal(REPORT_FEE);
+            expect(await publicService.REWARD_AMOUNT()).to.equal(REWARD_AMOUNT);
+        });
+
+        it("Admin can update all params via setEconomicParams", async function () {
+            const { publicService, admin } = await loadFixture(deployPublicServiceFixture);
+            await expect(
+                publicService.connect(admin).setEconomicParams(
+                    UPDATED_STAKE_AMOUNT,
+                    UPDATED_REPORT_FEE,
+                    UPDATED_REWARD_AMOUNT
+                )
+            )
+                .to.emit(publicService, "EconomicParamsUpdated")
+                .withArgs(UPDATED_STAKE_AMOUNT, UPDATED_REPORT_FEE, UPDATED_REWARD_AMOUNT, admin.address);
+
+            expect(await publicService.STAKE_AMOUNT()).to.equal(UPDATED_STAKE_AMOUNT);
+            expect(await publicService.REPORT_FEE()).to.equal(UPDATED_REPORT_FEE);
+            expect(await publicService.REWARD_AMOUNT()).to.equal(UPDATED_REWARD_AMOUNT);
+        });
+
+        it("Admin can update each param independently", async function () {
+            const { publicService, admin } = await loadFixture(deployPublicServiceFixture);
+
+            await publicService.connect(admin).setStakeAmount(UPDATED_STAKE_AMOUNT);
+            expect(await publicService.STAKE_AMOUNT()).to.equal(UPDATED_STAKE_AMOUNT);
+            expect(await publicService.REPORT_FEE()).to.equal(REPORT_FEE);
+            expect(await publicService.REWARD_AMOUNT()).to.equal(REWARD_AMOUNT);
+
+            await publicService.connect(admin).setReportFee(UPDATED_REPORT_FEE);
+            expect(await publicService.REPORT_FEE()).to.equal(UPDATED_REPORT_FEE);
+
+            await publicService.connect(admin).setRewardAmount(UPDATED_REWARD_AMOUNT);
+            expect(await publicService.REWARD_AMOUNT()).to.equal(UPDATED_REWARD_AMOUNT);
+        });
+
+        it("Non-admin cannot update economic params", async function () {
+            const { publicService, citizen1 } = await loadFixture(deployPublicServiceFixture);
+            await expect(
+                publicService.connect(citizen1).setEconomicParams(
+                    UPDATED_STAKE_AMOUNT,
+                    UPDATED_REPORT_FEE,
+                    UPDATED_REWARD_AMOUNT
+                )
+            ).to.be.reverted;
+        });
+
+        it("Should reject zero values", async function () {
+            const { publicService, admin } = await loadFixture(deployPublicServiceFixture);
+            await expect(
+                publicService.connect(admin).setEconomicParams(0, UPDATED_REPORT_FEE, UPDATED_REWARD_AMOUNT)
+            ).to.be.revertedWithCustomError(publicService, "InvalidEconomicParams");
+            await expect(
+                publicService.connect(admin).setEconomicParams(UPDATED_STAKE_AMOUNT, 0, UPDATED_REWARD_AMOUNT)
+            ).to.be.revertedWithCustomError(publicService, "InvalidEconomicParams");
+            await expect(
+                publicService.connect(admin).setEconomicParams(UPDATED_STAKE_AMOUNT, UPDATED_REPORT_FEE, 0)
+            ).to.be.revertedWithCustomError(publicService, "InvalidEconomicParams");
+        });
+    });
 
     describe("F1: Citizen Registration", function () {
         it("Should register a user with stake and make them active", async function () {
