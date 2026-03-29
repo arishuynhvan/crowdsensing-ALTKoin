@@ -2,7 +2,6 @@
 
 import { VStack, Textarea, Button, Text, HStack, Input, Box } from "@chakra-ui/react";
 import { useEffect, useMemo, useState } from "react";
-import { getDrafts, saveDrafts } from "@/lib/reportStore";
 import ImageUploader from "./imageUpload";
 import { submitReport } from "@/lib/api";
 
@@ -28,6 +27,16 @@ type ReportEditorProps = {
   }) => void;
 };
 
+type StoredDraft = {
+  id: number;
+  content: string;
+  cids: string[];
+  location: string;
+  latitude: number | null;
+  longitude: number | null;
+  submitted: boolean;
+};
+
 export default function ReportEditor({
   initialData,
   onSaveDraft,
@@ -44,6 +53,7 @@ export default function ReportEditor({
     }
   );
   const [loading, setLoading] = useState(false);
+  const [savingDraft, setSavingDraft] = useState(false);
   const [locating, setLocating] = useState(false);
   const [locationError, setLocationError] = useState("");
   const [touched, setTouched] = useState(false);
@@ -179,20 +189,66 @@ export default function ReportEditor({
   }, []);
 
   const handleSaveDraft = () => {
-    const drafts = getDrafts();
-    const newDraft: Draft = {
-      ...draft,
-      id: draft.id ?? Date.now(),
+    const save = async () => {
+      const user =
+        typeof window !== "undefined"
+          ? JSON.parse(localStorage.getItem("user") || "{}")
+          : null;
+      const reporter = user?.walletAddress || user?.identifier;
+      if (!reporter) {
+        alert("Bạn cần đăng nhập trước khi lưu nháp.");
+        return;
+      }
+
+      try {
+        setSavingDraft(true);
+        const method = draft.id ? "PUT" : "POST";
+        const res = await fetch("/api/drafts", {
+          method,
+          headers: {
+            "Content-Type": "application/json",
+          },
+          body: JSON.stringify({
+            id: draft.id,
+            reporter,
+            content: draft.content,
+            image_cids: draft.cids,
+            location: draft.location,
+            latitude: draft.latitude,
+            longitude: draft.longitude,
+          }),
+        });
+        const data = await res.json();
+        if (!res.ok) {
+          throw new Error(data?.error || "Lưu nháp thất bại.");
+        }
+
+        const parsedCids = Array.isArray(data.image_cids)
+          ? data.image_cids
+          : JSON.parse(data.image_cids || "[]");
+
+        const savedDraft: StoredDraft = {
+          id: data.id,
+          content: data.content || "",
+          cids: parsedCids,
+          location: data.location || "",
+          latitude: typeof data.latitude === "number" ? data.latitude : null,
+          longitude: typeof data.longitude === "number" ? data.longitude : null,
+          submitted: false,
+        };
+
+        setDraft((prev) => ({ ...prev, id: savedDraft.id }));
+        onSaveDraft?.(savedDraft);
+        alert("💾 Đã lưu Báo cáo vi phạm dưới dạng Nháp vào DB.");
+      } catch (err) {
+        const message = err instanceof Error ? err.message : "Lưu nháp thất bại.";
+        alert(`❌ ${message}`);
+      } finally {
+        setSavingDraft(false);
+      }
     };
 
-    const updated = drafts.some((d) => d.id === newDraft.id)
-      ? drafts.map((d) => (d.id === newDraft.id ? newDraft : d))
-      : [...drafts, newDraft];
-
-    saveDrafts(updated);
-    onSaveDraft?.(newDraft);
-
-    alert("💾 Đã lưu Báo cáo vi phạm dưới dạng Nháp.");
+    void save();
   };
 
   const handleSubmit = async () => {
@@ -212,7 +268,7 @@ export default function ReportEditor({
         location: draft.location,
         latitude: draft.latitude!,
         longitude: draft.longitude!,
-        reporter: user?.walletAddress ?? null,
+        reporterHashedId: user?.identifier ?? null,
       });
 
       setDraft((prev) => ({ ...prev, submitted: true }));
@@ -258,9 +314,10 @@ export default function ReportEditor({
         onBlur={() => setTouched(true)}
       />
 
-      <HStack align="start">
+      <HStack align="start" spacing={2} flexWrap="wrap">
         <Input
           placeholder="Latitude"
+          maxW={{ base: "140px", md: "160px" }}
           value={draft.latitude ?? ""}
           onChange={(e) =>
             setDraft((prev) => {
@@ -277,6 +334,7 @@ export default function ReportEditor({
         />
         <Input
           placeholder="Longitude"
+          maxW={{ base: "140px", md: "160px" }}
           value={draft.longitude ?? ""}
           onChange={(e) =>
             setDraft((prev) => {
@@ -291,10 +349,11 @@ export default function ReportEditor({
             })
           }
         />
-        <Button onClick={setLocationByBrowser} isLoading={locating}>
+        <Button onClick={setLocationByBrowser} isLoading={locating} whiteSpace="nowrap">
           Lấy vị trí
         </Button>
         <Button
+          whiteSpace="nowrap"
           onClick={() => {
             if (typeof draft.latitude === "number" && typeof draft.longitude === "number") {
               setMapCenter({ lat: draft.latitude, lng: draft.longitude });
@@ -336,8 +395,8 @@ export default function ReportEditor({
       <HStack>
         {!draft.submitted && (
           <>
-            <Button onClick={handleSaveDraft} colorScheme="gray">
-              💾 Lưu thành Nháp
+            <Button onClick={handleSaveDraft} colorScheme="gray" isLoading={savingDraft}>
+              {savingDraft ? "Đang lưu..." : "💾 Lưu thành Nháp"}
             </Button>
             <Button
               colorScheme="blue"

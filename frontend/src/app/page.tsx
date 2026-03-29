@@ -31,7 +31,7 @@ export default function Home() {
 
 
         {/* Tên app */}
-        <Heading size="2xl">MVP</Heading>
+        <Heading size="2xl">CROWDSENSING DAO</Heading>
 
 
         {/* Mô tả */}

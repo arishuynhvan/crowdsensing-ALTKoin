@@ -26,7 +26,13 @@ export default function VotingPage() {
       setLoading(true);
       setError("");
       const apiData = await getReports();
-      setReports(apiData);
+      const verified = apiData.filter(
+        (r) =>
+          typeof r.onchainReportId === "number" &&
+          Boolean(r.lastTxHash) &&
+          /^0x[a-fA-F0-9]{64}$/.test(r.lastTxHash ?? "")
+      );
+      setReports(verified);
     } catch (err) {
       const message =
         err instanceof Error ? err.message : "Không thể tải danh sách báo cáo.";
@@ -114,6 +120,21 @@ export default function VotingPage() {
                   {r.onchainReportId !== null
                     ? `Onchain Report ID: ${r.onchainReportId}`
                     : "Chưa đồng bộ on-chain"}
+                </Text>
+                <Text fontSize="xs" color="gray.500" mt={1}>
+                  Tx Hash:{" "}
+                  {r.lastTxHash ? (
+                    <a
+                      href={`https://sepolia.etherscan.io/tx/${r.lastTxHash}`}
+                      target="_blank"
+                      rel="noreferrer"
+                      style={{ color: "#2563eb", textDecoration: "underline" }}
+                    >
+                      {r.lastTxHash.slice(0, 10)}...{r.lastTxHash.slice(-8)}
+                    </a>
+                  ) : (
+                    "Chưa có"
+                  )}
                 </Text>
 
                 <HStack mt={3}>

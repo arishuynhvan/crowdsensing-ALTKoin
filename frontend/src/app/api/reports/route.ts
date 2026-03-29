@@ -26,7 +26,12 @@ db.exec(`
   CREATE TABLE IF NOT EXISTS reports (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     reporter TEXT,
+    reporter_hashed_id TEXT,
     content TEXT NOT NULL,
+    content_hash TEXT,
+    metadata_url TEXT,
+    payload_hash TEXT,
+    report_timestamp INTEGER,
     location_text TEXT NOT NULL,
     latitude REAL NOT NULL,
     longitude REAL NOT NULL,
@@ -62,6 +67,21 @@ if (!reportColumnNames.has("latitude")) {
 if (!reportColumnNames.has("longitude")) {
   db.exec(`ALTER TABLE reports ADD COLUMN longitude REAL NOT NULL DEFAULT 0;`);
 }
+if (!reportColumnNames.has("reporter_hashed_id")) {
+  db.exec(`ALTER TABLE reports ADD COLUMN reporter_hashed_id TEXT;`);
+}
+if (!reportColumnNames.has("content_hash")) {
+  db.exec(`ALTER TABLE reports ADD COLUMN content_hash TEXT;`);
+}
+if (!reportColumnNames.has("metadata_url")) {
+  db.exec(`ALTER TABLE reports ADD COLUMN metadata_url TEXT;`);
+}
+if (!reportColumnNames.has("payload_hash")) {
+  db.exec(`ALTER TABLE reports ADD COLUMN payload_hash TEXT;`);
+}
+if (!reportColumnNames.has("report_timestamp")) {
+  db.exec(`ALTER TABLE reports ADD COLUMN report_timestamp INTEGER;`);
+}
 
 function parseImageCids(value: string): string[] {
   try {
@@ -75,7 +95,12 @@ function parseImageCids(value: string): string[] {
 function normalizeReport(row: {
   id: number;
   reporter: string | null;
+  reporter_hashed_id: string | null;
   content: string;
+  content_hash: string | null;
+  metadata_url: string | null;
+  payload_hash: string | null;
+  report_timestamp: number | null;
   location_text: string;
   latitude: number;
   longitude: number;
@@ -86,10 +111,19 @@ function normalizeReport(row: {
   onchain_report_id: number | null;
   last_tx_hash: string | null;
 }) {
+  const txUrl =
+    row.last_tx_hash && /^0x[a-fA-F0-9]{64}$/.test(row.last_tx_hash)
+      ? `https://sepolia.etherscan.io/tx/${row.last_tx_hash}`
+      : null;
   return {
     id: row.id,
     reporter: row.reporter,
+    reporterHashedId: row.reporter_hashed_id,
     content: row.content,
+    contentHash: row.content_hash,
+    metadataUrl: row.metadata_url,
+    payloadHash: row.payload_hash,
+    reportTimestamp: row.report_timestamp,
     location: row.location_text,
     latitude: row.latitude,
     longitude: row.longitude,
@@ -99,6 +133,7 @@ function normalizeReport(row: {
     timestamp: row.timestamp,
     onchainReportId: row.onchain_report_id,
     lastTxHash: row.last_tx_hash,
+    txUrl,
   };
 }
 
@@ -113,7 +148,8 @@ function getSessionVoter(req: NextRequest): string | null {
 export async function GET() {
   const rows = db
     .prepare(
-      `SELECT id, reporter, content, image_cids, score, status, timestamp, onchain_report_id, last_tx_hash
+      `SELECT id, reporter, reporter_hashed_id, content, content_hash, metadata_url, payload_hash, report_timestamp,
+              image_cids, score, status, timestamp, onchain_report_id, last_tx_hash
              , location_text, latitude, longitude
        FROM reports
        ORDER BY score DESC, timestamp DESC`
@@ -121,7 +157,12 @@ export async function GET() {
     .all() as Array<{
     id: number;
     reporter: string | null;
+    reporter_hashed_id: string | null;
     content: string;
+    content_hash: string | null;
+    metadata_url: string | null;
+    payload_hash: string | null;
+    report_timestamp: number | null;
     location_text: string;
     latitude: number;
     longitude: number;
@@ -138,8 +179,27 @@ export async function GET() {
 
 export async function POST(req: NextRequest) {
   try {
-    const { content, cids, reporter, onchainReportId, txHash, location, latitude, longitude } =
-      await req.json();
+    const token = req.cookies.get("auth_token")?.value;
+    const sessionUser = token ? getUserBySessionToken(token) : null;
+    if (!sessionUser) {
+      return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+    }
+
+    const {
+      content,
+      cids,
+      reporter,
+      reporterHashedId,
+      contentHash,
+      metadataUrl,
+      payloadHash,
+      reportTimestamp,
+      onchainReportId,
+      txHash,
+      location,
+      latitude,
+      longitude,
+    } = await req.json();
 
     if (!content || typeof content !== "string" || !content.trim()) {
       return NextResponse.json({ error: "Nội dung báo cáo là bắt buộc." }, { status: 400 });
@@ -150,38 +210,74 @@ export async function POST(req: NextRequest) {
     if (typeof latitude !== "number" || typeof longitude !== "number") {
       return NextResponse.json({ error: "Tọa độ lat/lng không hợp lệ." }, { status: 400 });
     }
+    if (!Number.isInteger(onchainReportId) || onchainReportId < 0) {
+      return NextResponse.json(
+        { error: "Báo cáo phải có onchainReportId hợp lệ trước khi lưu." },
+        { status: 400 }
+      );
+    }
+    if (typeof txHash !== "string" || !/^0x[a-fA-F0-9]{64}$/.test(txHash)) {
+      return NextResponse.json(
+        { error: "Báo cáo phải có transaction hash on-chain hợp lệ." },
+        { status: 400 }
+      );
+    }
+    if (reporter && reporter.toLowerCase() !== sessionUser.walletAddress.toLowerCase()) {
+      return NextResponse.json(
+        { error: "Ví gửi báo cáo không khớp ví của tài khoản đăng nhập." },
+        { status: 403 }
+      );
+    }
+    if (reporterHashedId && reporterHashedId !== sessionUser.identifier) {
+      return NextResponse.json(
+        { error: "Reporter hashed id không khớp tài khoản đăng nhập." },
+        { status: 403 }
+      );
+    }
 
     const imageCids = Array.isArray(cids) ? cids : [];
     const timestamp = Date.now();
     const info = db
       .prepare(
         `INSERT INTO reports (
-          reporter, content, location_text, latitude, longitude,
+          reporter, reporter_hashed_id, content, content_hash, metadata_url, payload_hash, report_timestamp,
+          location_text, latitude, longitude,
           image_cids, score, status, timestamp, onchain_report_id, last_tx_hash
         )
-         VALUES (?, ?, ?, ?, ?, ?, 0, 'Chờ kiểm duyệt', ?, ?, ?)`
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, 'Chờ kiểm duyệt', ?, ?, ?)`
       )
       .run(
         reporter ?? null,
+        reporterHashedId ?? null,
         content.trim(),
+        contentHash ?? null,
+        metadataUrl ?? null,
+        payloadHash ?? null,
+        Number.isFinite(reportTimestamp) ? reportTimestamp : Date.now(),
         location.trim(),
         latitude,
         longitude,
         JSON.stringify(imageCids),
         timestamp,
-        Number.isInteger(onchainReportId) ? onchainReportId : null,
-        txHash ?? null
+        onchainReportId,
+        txHash
       );
 
     const row = db
       .prepare(
-        `SELECT id, reporter, content, location_text, latitude, longitude, image_cids, score, status, timestamp, onchain_report_id, last_tx_hash
+        `SELECT id, reporter, reporter_hashed_id, content, content_hash, metadata_url, payload_hash, report_timestamp,
+                location_text, latitude, longitude, image_cids, score, status, timestamp, onchain_report_id, last_tx_hash
          FROM reports WHERE id = ?`
       )
       .get(info.lastInsertRowid) as {
       id: number;
       reporter: string | null;
+      reporter_hashed_id: string | null;
       content: string;
+      content_hash: string | null;
+      metadata_url: string | null;
+      payload_hash: string | null;
+      report_timestamp: number | null;
       location_text: string;
       latitude: number;
       longitude: number;
@@ -211,7 +307,8 @@ export async function PATCH(req: NextRequest) {
 
     const existing = db
       .prepare(
-        `SELECT id, reporter, content, image_cids, score, status, timestamp, onchain_report_id, last_tx_hash
+        `SELECT id, reporter, reporter_hashed_id, content, content_hash, metadata_url, payload_hash, report_timestamp,
+                image_cids, score, status, timestamp, onchain_report_id, last_tx_hash
              , location_text, latitude, longitude
          FROM reports WHERE id = ?`
       )
@@ -219,7 +316,12 @@ export async function PATCH(req: NextRequest) {
       | {
           id: number;
           reporter: string | null;
+          reporter_hashed_id: string | null;
           content: string;
+          content_hash: string | null;
+          metadata_url: string | null;
+          payload_hash: string | null;
+          report_timestamp: number | null;
           location_text: string;
           latitude: number;
           longitude: number;
@@ -280,14 +382,20 @@ export async function PATCH(req: NextRequest) {
 
     const updated = db
       .prepare(
-        `SELECT id, reporter, content, image_cids, score, status, timestamp, onchain_report_id, last_tx_hash
+        `SELECT id, reporter, reporter_hashed_id, content, content_hash, metadata_url, payload_hash, report_timestamp,
+                image_cids, score, status, timestamp, onchain_report_id, last_tx_hash
              , location_text, latitude, longitude
          FROM reports WHERE id = ?`
       )
       .get(reportId) as {
       id: number;
       reporter: string | null;
+      reporter_hashed_id: string | null;
       content: string;
+      content_hash: string | null;
+      metadata_url: string | null;
+      payload_hash: string | null;
+      report_timestamp: number | null;
       location_text: string;
       latitude: number;
       longitude: number;

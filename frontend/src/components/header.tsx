@@ -28,7 +28,7 @@ export default function Header() {
             <Flex justify="space-between" align="center" gap={4} wrap="wrap">
                 <HStack spacing={3}>
                     <Text fontWeight="bold" cursor="pointer" onClick={() => router.push("/")}>
-                        🚀 MVP App
+                        🚀 Crowdsensing DAO
                     </Text>
                     <HStack spacing={2}>
                         {navItems.map((item) => (

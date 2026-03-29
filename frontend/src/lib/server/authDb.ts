@@ -12,6 +12,10 @@ type UserRow = {
   wallet_address: string;
   role: Role;
   is_active: number;
+  deposit_units: number;
+  stake_eth: string;
+  onchain_registered: number;
+  onchain_register_tx_hash: string | null;
   password_hash: string;
   password_salt: string;
 };
@@ -23,6 +27,13 @@ export type SafeUser = {
   identifier: string;
   walletAddress: string;
   isActive: boolean;
+  depositUnits: number;
+  depositVnd: number;
+  vndPerEth: number;
+  stakeRequiredVnd: number;
+  stakeEth: string;
+  onchainRegistered: boolean;
+  onchainRegisterTxHash: string | null;
 };
 
 type RegisterInput = {
@@ -31,11 +42,21 @@ type RegisterInput = {
   phone: string;
   address: string;
   password: string;
-  deposit: number;
+  depositVnd: number;
+  vndPerEth: number;
+  stakeRequiredVnd: number;
+  stakeEth: string;
+  walletAddress: string;
+  onchainRegisterTxHash: string | null;
 };
 
 const SESSION_TTL_MS = 7 * 24 * 60 * 60 * 1000;
 const ADMIN_WALLET = "0x4570FDbd50e25C1E80836e73099b4f7BFABDEbd6";
+const RESERVED_CITIZEN_WALLETS = [
+  { address: "0x1a3A0F65eC68252700F00C2c7d4816DaC260d9d3", keyEnv: "CITIZEN1_PRIVATE_KEY" },
+  { address: "0xBaC2f319A4EbBEbCd0A8eA44989fF61c4D5C5eDc", keyEnv: "CITIZEN2_PRIVATE_KEY" },
+  { address: "0x6D5f4C9453526975d3E264f110d4fB1fdB6ACc54", keyEnv: "CITIZEN3_PRIVATE_KEY" },
+] as const;
 
 function resolveDataDir(): string {
   const cwd = process.cwd();
@@ -62,6 +83,13 @@ db.exec(`
     password_hash TEXT NOT NULL,
     password_salt TEXT NOT NULL,
     wallet_address TEXT NOT NULL UNIQUE,
+    deposit_units INTEGER NOT NULL DEFAULT 0,
+    deposit_vnd INTEGER NOT NULL DEFAULT 0,
+    vnd_per_eth INTEGER NOT NULL DEFAULT 100000000,
+    stake_required_vnd INTEGER NOT NULL DEFAULT 0,
+    stake_eth TEXT NOT NULL DEFAULT '0.05',
+    onchain_registered INTEGER NOT NULL DEFAULT 0,
+    onchain_register_tx_hash TEXT,
     role TEXT NOT NULL DEFAULT 'CIT',
     is_active INTEGER NOT NULL DEFAULT 0,
     created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
@@ -80,16 +108,36 @@ db.exec(`
   CREATE INDEX IF NOT EXISTS idx_users_hash ON users(cccd_hash);
 `);
 
+const userCols = db.prepare("PRAGMA table_info(users)").all() as Array<{ name: string }>;
+const userColNames = new Set(userCols.map((c) => c.name));
+if (!userColNames.has("deposit_units")) {
+  db.exec(`ALTER TABLE users ADD COLUMN deposit_units INTEGER NOT NULL DEFAULT 0`);
+}
+if (!userColNames.has("deposit_vnd")) {
+  db.exec(`ALTER TABLE users ADD COLUMN deposit_vnd INTEGER NOT NULL DEFAULT 0`);
+}
+if (!userColNames.has("vnd_per_eth")) {
+  db.exec(`ALTER TABLE users ADD COLUMN vnd_per_eth INTEGER NOT NULL DEFAULT 100000000`);
+}
+if (!userColNames.has("stake_required_vnd")) {
+  db.exec(`ALTER TABLE users ADD COLUMN stake_required_vnd INTEGER NOT NULL DEFAULT 0`);
+}
+if (!userColNames.has("stake_eth")) {
+  db.exec(`ALTER TABLE users ADD COLUMN stake_eth TEXT NOT NULL DEFAULT '0.05'`);
+}
+if (!userColNames.has("onchain_registered")) {
+  db.exec(`ALTER TABLE users ADD COLUMN onchain_registered INTEGER NOT NULL DEFAULT 0`);
+}
+if (!userColNames.has("onchain_register_tx_hash")) {
+  db.exec(`ALTER TABLE users ADD COLUMN onchain_register_tx_hash TEXT`);
+}
+
 function sha256(input: string): string {
   return crypto.createHash("sha256").update(input).digest("hex");
 }
 
 function hashPassword(password: string, salt: string): string {
   return crypto.scryptSync(password, salt, 64).toString("hex");
-}
-
-function generateWalletAddress(): string {
-  return `0x${crypto.randomBytes(20).toString("hex")}`;
 }
 
 function toSafeUser(user: UserRow): SafeUser {
@@ -100,6 +148,13 @@ function toSafeUser(user: UserRow): SafeUser {
     identifier: user.cccd_hash,
     walletAddress: user.wallet_address,
     isActive: Boolean(user.is_active),
+    depositUnits: user.deposit_units,
+    depositVnd: user.deposit_vnd,
+    vndPerEth: user.vnd_per_eth,
+    stakeRequiredVnd: user.stake_required_vnd,
+    stakeEth: user.stake_eth,
+    onchainRegistered: Boolean(user.onchain_registered),
+    onchainRegisterTxHash: user.onchain_register_tx_hash,
   };
 }
 
@@ -118,7 +173,8 @@ function seedAdminUser() {
   db.prepare(
     `INSERT INTO users (
       name, cccd, cccd_hash, cccd_salt, phone, address, password_hash, password_salt, wallet_address, role, is_active
-    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+      , deposit_units, deposit_vnd, vnd_per_eth, stake_required_vnd, stake_eth, onchain_registered, onchain_register_tx_hash
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
   ).run(
     "System Admin",
     "ADMIN_SEED",
@@ -130,7 +186,14 @@ function seedAdminUser() {
     passwordSalt,
     ADMIN_WALLET,
     "GOV",
-    1
+    1,
+    0,
+    0,
+    100000000,
+    0,
+    "0.05",
+    1,
+    null
   );
 }
 
@@ -141,7 +204,7 @@ export function registerCitizen(input: RegisterInput): SafeUser {
   const cccdHash = sha256(`${input.cccd}:${cccdSalt}`);
   const passwordSalt = crypto.randomBytes(16).toString("hex");
   const passwordHash = hashPassword(input.password, passwordSalt);
-  const walletAddress = generateWalletAddress();
+  const walletAddress = input.walletAddress;
 
   const insert = db.transaction(() => {
     const existingCccd = db
@@ -155,8 +218,10 @@ export function registerCitizen(input: RegisterInput): SafeUser {
     const info = db
       .prepare(
         `INSERT INTO users (
-          name, cccd, cccd_hash, cccd_salt, phone, address, password_hash, password_salt, wallet_address, role, is_active
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+          name, cccd, cccd_hash, cccd_salt, phone, address, password_hash, password_salt, wallet_address,
+          role, is_active, deposit_units, deposit_vnd, vnd_per_eth, stake_required_vnd, stake_eth,
+          onchain_registered, onchain_register_tx_hash
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
       )
       .run(
         input.name.trim(),
@@ -169,7 +234,14 @@ export function registerCitizen(input: RegisterInput): SafeUser {
         passwordSalt,
         walletAddress,
         "CIT",
-        input.deposit > 0 ? 1 : 0
+        input.depositVnd > 0 ? 1 : 0,
+        input.depositVnd,
+        input.depositVnd,
+        input.vndPerEth,
+        input.stakeRequiredVnd,
+        input.stakeEth,
+        1,
+        input.onchainRegisterTxHash
       );
 
     return info.lastInsertRowid as number;
@@ -178,11 +250,56 @@ export function registerCitizen(input: RegisterInput): SafeUser {
   const userId = insert();
   const user = db
     .prepare(
-      "SELECT id, name, cccd_hash, wallet_address, role, is_active, password_hash, password_salt FROM users WHERE id = ?"
+      `SELECT id, name, cccd_hash, wallet_address, role, is_active, deposit_units, stake_eth, onchain_registered,
+              deposit_vnd, vnd_per_eth, stake_required_vnd, onchain_register_tx_hash, password_hash, password_salt
+       FROM users WHERE id = ?`
     )
     .get(userId) as UserRow;
 
   return toSafeUser(user);
+}
+
+export function allocateReservedCitizenWallet(): {
+  walletAddress: `0x${string}`;
+  privateKey: `0x${string}`;
+} {
+  for (const item of RESERVED_CITIZEN_WALLETS) {
+    const exists = db
+      .prepare("SELECT id FROM users WHERE wallet_address = ? LIMIT 1")
+      .get(item.address) as { id: number } | undefined;
+    if (exists) {
+      continue;
+    }
+
+    const privateKey = process.env[item.keyEnv] as `0x${string}` | undefined;
+    if (!privateKey || !/^0x[a-fA-F0-9]{64}$/.test(privateKey)) {
+      throw new Error(
+        `Thiếu ${item.keyEnv} hợp lệ trong frontend/.env.local cho ví dự phòng ${item.address}.`
+      );
+    }
+
+    return {
+      walletAddress: item.address as `0x${string}`,
+      privateKey,
+    };
+  }
+
+  throw new Error("Hết ví citizen dự phòng. Cần thêm ví mới hoặc giải phóng ví đã cấp.");
+}
+
+export function getReservedPrivateKeyForWallet(
+  walletAddress: string
+): `0x${string}` | null {
+  const target = RESERVED_CITIZEN_WALLETS.find(
+    (item) => item.address.toLowerCase() === walletAddress.toLowerCase()
+  );
+  if (!target) return null;
+
+  const privateKey = process.env[target.keyEnv] as `0x${string}` | undefined;
+  if (!privateKey || !/^0x[a-fA-F0-9]{64}$/.test(privateKey)) {
+    return null;
+  }
+  return privateKey;
 }
 
 export function loginWithIdentifier(
@@ -192,6 +309,7 @@ export function loginWithIdentifier(
   const user = db
     .prepare(
       `SELECT id, name, cccd_hash, wallet_address, role, is_active, password_hash, password_salt
+              , deposit_units, deposit_vnd, vnd_per_eth, stake_required_vnd, stake_eth, onchain_registered, onchain_register_tx_hash
        FROM users
        WHERE cccd_hash = ? OR wallet_address = ?
        LIMIT 1`
@@ -230,6 +348,8 @@ export function getUserBySessionToken(token: string): SafeUser | null {
   const user = db
     .prepare(
       `SELECT u.id, u.name, u.cccd_hash, u.wallet_address, u.role, u.is_active, u.password_hash, u.password_salt
+              , u.deposit_units, u.deposit_vnd, u.vnd_per_eth, u.stake_required_vnd,
+                u.stake_eth, u.onchain_registered, u.onchain_register_tx_hash
        FROM sessions s
        JOIN users u ON u.id = s.user_id
        WHERE s.token_hash = ? AND s.expires_at > ?

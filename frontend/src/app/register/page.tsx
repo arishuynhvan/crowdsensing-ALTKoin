@@ -87,7 +87,10 @@ export default function RegisterPage() {
 
 
     const depositValue = Number(deposit);
-    const isValidDeposit = depositValue > 0;
+    const isValidDeposit = Number.isInteger(depositValue) && depositValue >= 1;
+    const VND_PER_ETH = Number(process.env.NEXT_PUBLIC_VND_PER_ETH ?? 100000000);
+    const [stakeEthDisplay] = useState("0.05");
+    const [minDepositVnd] = useState(Math.ceil(0.05 * VND_PER_ETH));
 
 
     // ======================
@@ -111,6 +114,13 @@ export default function RegisterPage() {
         setLoading(true);
 
         try {
+            if (depositValue < minDepositVnd) {
+                setError(
+                    `Số tiền nạp (${depositValue.toLocaleString("vi-VN")} VND) chưa đủ. Cần tối thiểu ${minDepositVnd.toLocaleString("vi-VN")} VND để cover ${stakeEthDisplay} ETH stake on-chain.`
+                );
+                return;
+            }
+
             const res = await fetch("/api/auth/register", {
                 method: "POST",
                 headers: {
@@ -118,7 +128,9 @@ export default function RegisterPage() {
                 },
                 body: JSON.stringify({
                     ...form,
-                    deposit: depositValue,
+                    depositVnd: depositValue,
+                    vndPerEth: VND_PER_ETH,
+                    stakeRequiredVnd: minDepositVnd,
                 }),
             });
 
@@ -131,8 +143,9 @@ export default function RegisterPage() {
             setHashCCCD(data.user.identifier);
             setWallet(data.user.walletAddress);
             setStep(3);
-        } catch {
-            setError("Không thể kết nối máy chủ.");
+        } catch (err) {
+            const message = err instanceof Error ? err.message : "Không thể đăng ký on-chain.";
+            setError(message);
         } finally {
             setLoading(false);
         }
@@ -267,7 +280,19 @@ export default function RegisterPage() {
             {/* STEP 2 */}
             {step === 2 && (
                 <VStack spacing={3}>
-                    <Text>Hệ thống sẽ tạo Hash CCCD + ví blockchain sau khi xác nhận ký quỹ.</Text>
+                    <Text>
+                        Hệ thống sẽ cấp 1 ví citizen dự phòng và tự động gọi on-chain
+                        `registerCitizen` cho ví đó (stake cố định theo smart contract là{" "}
+                        {stakeEthDisplay} ETH).
+                    </Text>
+
+                    <Text fontSize="sm" color="gray.600">
+                        Tỷ giá cấu hình: 1 ETH = {VND_PER_ETH.toLocaleString("vi-VN")} VND
+                    </Text>
+                    <Text fontSize="sm" color="gray.600">
+                        Mức tối thiểu tương ứng stake on-chain:{" "}
+                        {`${minDepositVnd.toLocaleString("vi-VN")} VND`}
+                    </Text>
 
 
                     <FormInput
@@ -284,7 +309,7 @@ export default function RegisterPage() {
 
                     {deposit && !isValidDeposit && (
                         <Text color="red.500" fontSize="sm">
-                            Số tiền phải lớn hơn 0!
+                            Số tiền phải là số nguyên và &gt;= 1!
                         </Text>
                     )}
 

@@ -4,7 +4,10 @@ import path from 'path';
 import fs from 'fs';
 
 // Define the path to the data directory and the database file
-const dataDir = path.resolve(process.cwd(), 'frontend', 'src', 'app', 'data');
+const dataDir =
+  path.basename(process.cwd()) === 'frontend'
+    ? path.resolve(process.cwd(), 'src', 'app', 'data')
+    : path.resolve(process.cwd(), 'frontend', 'src', 'app', 'data');
 const dbPath = path.join(dataDir, 'drafts.db');
 
 // Ensure the data directory exists
@@ -20,9 +23,18 @@ db.exec(`
     reporter TEXT NOT NULL,
     content TEXT,
     image_cids TEXT,
+    location TEXT,
+    latitude REAL,
+    longitude REAL,
     updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
   )
 `);
+
+const cols = db.prepare(`PRAGMA table_info(drafts)`).all() as Array<{ name: string }>;
+const colNames = new Set(cols.map((c) => c.name));
+if (!colNames.has('location')) db.exec(`ALTER TABLE drafts ADD COLUMN location TEXT`);
+if (!colNames.has('latitude')) db.exec(`ALTER TABLE drafts ADD COLUMN latitude REAL`);
+if (!colNames.has('longitude')) db.exec(`ALTER TABLE drafts ADD COLUMN longitude REAL`);
 
 // GET /api/drafts?reporter=<address> - Get all drafts for a reporter
 // GET /api/drafts?id=<id> - Get a single draft by id
@@ -50,7 +62,7 @@ export async function GET(req: NextRequest) {
 
 // POST /api/drafts - Create a new draft
 export async function POST(req: NextRequest) {
-  const { reporter, content, image_cids } = await req.json();
+  const { reporter, content, image_cids, location, latitude, longitude } = await req.json();
 
   if (!reporter) {
     return NextResponse.json({ error: 'Reporter address is required' }, { status: 400 });
@@ -59,8 +71,17 @@ export async function POST(req: NextRequest) {
   const imageCidsJson = JSON.stringify(image_cids || []);
 
   try {
-    const stmt = db.prepare('INSERT INTO drafts (reporter, content, image_cids) VALUES (?, ?, ?)');
-    const info = stmt.run(reporter, content, imageCidsJson);
+    const stmt = db.prepare(
+      'INSERT INTO drafts (reporter, content, image_cids, location, latitude, longitude) VALUES (?, ?, ?, ?, ?, ?)'
+    );
+    const info = stmt.run(
+      reporter,
+      content,
+      imageCidsJson,
+      location ?? null,
+      typeof latitude === 'number' ? latitude : null,
+      typeof longitude === 'number' ? longitude : null
+    );
 
     const newDraft = db.prepare('SELECT * FROM drafts WHERE id = ?').get(info.lastInsertRowid);
 
@@ -73,7 +94,7 @@ export async function POST(req: NextRequest) {
 
 // PUT /api/drafts - Update a draft
 export async function PUT(req: NextRequest) {
-  const { id, reporter, content, image_cids } = await req.json();
+  const { id, reporter, content, image_cids, location, latitude, longitude } = await req.json();
 
   if (!id || !reporter) {
     return NextResponse.json({ error: 'ID and reporter address are required' }, { status: 400 });
@@ -88,8 +109,17 @@ export async function PUT(req: NextRequest) {
   const imageCidsJson = JSON.stringify(image_cids || []);
 
   try {
-    const stmt = db.prepare('UPDATE drafts SET content = ?, image_cids = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?');
-    stmt.run(content, imageCidsJson, id);
+    const stmt = db.prepare(
+      'UPDATE drafts SET content = ?, image_cids = ?, location = ?, latitude = ?, longitude = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?'
+    );
+    stmt.run(
+      content,
+      imageCidsJson,
+      location ?? null,
+      typeof latitude === 'number' ? latitude : null,
+      typeof longitude === 'number' ? longitude : null,
+      id
+    );
 
     const updatedDraft = db.prepare('SELECT * FROM drafts WHERE id = ?').get(id);
     return NextResponse.json(updatedDraft);
