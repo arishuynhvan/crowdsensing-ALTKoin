@@ -115,14 +115,23 @@ All have 0.2-0.5 Sepolia ETH each
 ## 6. Frontend Multi-Wallet Config
 ```bash
 # frontend/.env.local
-NEXT_PUBLIC_RPC_URL=https://rpc.ankr.com/eth_sepolia
-NEXT_PUBLIC_PUBLIC_SERVICE=0xYourDeployedContract
+NEXT_PUBLIC_RPC_URL=AlchemyURL
+NEXT_PUBLIC_PUBLIC_SERVICE=0xDeployedContract
 TEST_WALLETS="0x7109...,0x3C44...,0x90F7...,0xFFcf..."
 ```
 
 ## 7. Deploy & Test Commands
+### Deploy Command (Either RPC)
 ```bash
-npx hardhat test
+cd contracts
+npx hardhat run scripts/deploy-sepolia.cjs --network sepolia
+```
+
+### Verify RPC Works First
+```bash
+cd contracts
+npx hardhat console --network sepolia
+> await ethers.provider.getBlockNumber()  // Should return ~50M
 ```
 
 ##  Flow on Etherscan:
@@ -134,3 +143,7 @@ Tx8-9: Citizens voteUp/Down
 Tx10: Admin approve/reject → payouts
 ```
 
+## 8. Deployed Contract
+Deploying contracts with the account: 0x4570FDbd50e25C1E80836e73099b4f7BFABDEbd6
+PublicService deployed to: 0x1f7c6EAa4D0777Bcc1764Af9157721254aF1D313
+Verify on Sepolia Etherscan: https://sepolia.etherscan.io/address/0x1f7c6EAa4D0777Bcc1764Af9157721254aF1D313

@@ -1,0 +1,9 @@
+{
+  "gemini.contextFiles": [
+    "SRS.md",
+    "frontend/SRS.md", 
+    "contracts/SRS-REQUIREMENTS.md",
+    "GEMINI.md"
+  ],
+  "gemini.customInstructions": "ALWAYS reference SRS.md for functional requirements F1.1-F5.3 and user roles (Citizen/Admin). Never deviate from specified logic."
+}

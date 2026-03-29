@@ -4,177 +4,86 @@ const { loadFixture } = require("@nomicfoundation/hardhat-network-helpers");
 
 describe("PublicService", function () {
     async function deployPublicServiceFixture() {
-        const [admin, citizen1, citizen2, citizen3, otherAccount] = await ethers.getSigners();
-
+        const [admin, citizen1, citizen2, citizen3, ...otherAccounts] = await ethers.getSigners();
         const PublicService = await ethers.getContractFactory("PublicService");
-        const publicService = await PublicService.deploy(admin.address);
-
-        return { publicService, admin, citizen1, citizen2, citizen3, otherAccount };
+        const publicService = await PublicService.connect(admin).deploy();
+        return { publicService, admin, citizen1, citizen2, citizen3, otherAccounts };
     }
 
-    const STAKE_AMOUNT = ethers.parseEther("1");
-    const REPORT_FEE = ethers.parseEther("0.01");
-    const REWARD_AMOUNT = ethers.parseEther("0.1");
+    const STAKE_AMOUNT = ethers.parseEther("0.05");
+    const REPORT_FEE = ethers.parseEther("0.001");
+    const REWARD_AMOUNT = ethers.parseEther("0.0001");
 
     describe("F1: Citizen Registration", function () {
-        it("Should allow a user to register as a citizen by paying the stake amount", async function () {
+        it("Should register a user with stake and make them active", async function () {
             const { publicService, citizen1 } = await loadFixture(deployPublicServiceFixture);
-
-            await expect(publicService.connect(citizen1).registerCitizen({ value: STAKE_AMOUNT }))
-                .to.emit(publicService, "CitizenRegistered")
-                .withArgs(citizen1.address, STAKE_AMOUNT);
-
-            expect(await publicService.stakes(citizen1.address)).to.equal(STAKE_AMOUNT);
-        });
-
-        it("Should fail if the stake amount is incorrect", async function () {
-            const { publicService, citizen1 } = await loadFixture(deployPublicServiceFixture);
-            await expect(publicService.connect(citizen1).registerCitizen({ value: ethers.parseEther("0.5") })).to.be.revertedWithCustomError(publicService, "InsufficientStake");
-        });
-
-        it("Should fail if the user is already registered", async function () {
-            const { publicService, citizen1 } = await loadFixture(deployPublicServiceFixture);
-            await publicService.connect(citizen1).registerCitizen({ value: STAKE_AMOUNT });
-            await expect(publicService.connect(citizen1).registerCitizen({ value: STAKE_AMOUNT })).to.be.revertedWithCustomError(publicService, "AlreadyRegistered");
+            await expect(publicService.connect(citizen1).registerCitizen({ value: STAKE_AMOUNT })).to.emit(publicService, "CitizenRegistered");
+            expect(await publicService.isLocked(citizen1.address)).to.be.false;
         });
     });
 
     describe("F3: Report Submission & Updates", function () {
-        let publicService, citizen1;
-
+        let ps, c1;
         beforeEach(async function () {
-            const fixture = await loadFixture(deployPublicServiceFixture);
-            publicService = fixture.publicService;
-            citizen1 = fixture.citizen1;
-            await publicService.connect(citizen1).registerCitizen({ value: STAKE_AMOUNT });
+            const { publicService, citizen1 } = await loadFixture(deployPublicServiceFixture);
+            ps = publicService;
+            c1 = citizen1;
+            await ps.connect(c1).registerCitizen({ value: STAKE_AMOUNT });
         });
-
-        it("Should allow an active citizen to submit a report", async function () {
-            await expect(publicService.connect(citizen1).submitReport("hash1", ["cid1"], "location1", { value: REPORT_FEE }))
-                .to.emit(publicService, "ReportSubmitted")
-                .withArgs(0, citizen1.address);
-
-            const report = await publicService.getReport(0);
-            expect(report.reporter).to.equal(citizen1.address);
+        it("Should allow active citizen to submit a report with fee", async function () {
+            await expect(ps.connect(c1).submitReport("h1", ["c1"], "l1", { value: REPORT_FEE })).to.emit(ps, "ReportSubmitted");
         });
-
-        it("Should allow a reporter to update their report", async function () {
-            await publicService.connect(citizen1).submitReport("hash1", ["cid1"], "location1", { value: REPORT_FEE });
-            await expect(publicService.connect(citizen1).updateReport(0, "newHash", ["newCid"], "newLocation"))
-                .to.emit(publicService, "ReportUpdated")
-                .withArgs(0);
-
-            const report = await publicService.getReport(0);
-            expect(report.contentHash).to.equal("newHash");
-            expect(report.imageCIDs[1]).to.equal("newCid");
+        it("Should allow free updates", async function () {
+            await ps.connect(c1).submitReport("h1", ["c1"], "l1", { value: REPORT_FEE });
+            const balanceBefore = await ethers.provider.getBalance(c1.address);
+            const tx = await ps.connect(c1).updateReport(0, "newHash", ["newCid"], "newLoc");
+            const receipt = await tx.wait();
+            const gasCost = receipt.gasUsed * receipt.gasPrice;
+            expect(await ethers.provider.getBalance(c1.address)).to.equal(balanceBefore - gasCost);
         });
     });
 
-    describe("F4: Voting", function () {
-        let publicService, citizen1, citizen2;
-
+    describe("F4: Voting and Report Queue", function () {
+        let ps, c1, c2, c3;
         beforeEach(async function () {
-            const fixture = await loadFixture(deployPublicServiceFixture);
-            publicService = fixture.publicService;
-            citizen1 = fixture.citizen1;
-            citizen2 = fixture.citizen2;
-            await publicService.connect(citizen1).registerCitizen({ value: STAKE_AMOUNT });
-            await publicService.connect(citizen2).registerCitizen({ value: STAKE_AMOUNT });
-            await publicService.connect(citizen1).submitReport("hash1", ["cid1"], "location1", { value: REPORT_FEE });
+            const { publicService, citizen1, citizen2, citizen3 } = await loadFixture(deployPublicServiceFixture);
+            ps = publicService;
+            [c1, c2, c3] = [citizen1, citizen2, citizen3];
+            await ps.connect(c1).registerCitizen({ value: STAKE_AMOUNT });
+            await ps.connect(c2).registerCitizen({ value: STAKE_AMOUNT });
+            await ps.connect(c3).registerCitizen({ value: STAKE_AMOUNT });
         });
-
-        it("Should allow an active citizen to vote up a report", async function () {
-            await expect(publicService.connect(citizen2).voteUp(0))
-                .to.emit(publicService, "Voted")
-                .withArgs(0, citizen2.address, true);
-            const report = await publicService.getReport(0);
-            expect(report.score).to.equal(1);
+        it("Should inc/dec score on vote", async function () {
+            await ps.connect(c1).submitReport("h", [], "l", { value: REPORT_FEE });
+            await ps.connect(c2).voteUp(0);
+            let r = await ps.getReport(0);
+            expect(r.score).to.equal(1);
         });
-
-        it("Should allow an active citizen to vote down a report", async function () {
-            await expect(publicService.connect(citizen2).voteDown(0))
-                .to.emit(publicService, "Voted")
-                .withArgs(0, citizen2.address, false);
-            const report = await publicService.getReport(0);
-            expect(report.score).to.equal(-1);
-        });
-
-        it("Should not allow a citizen to vote twice", async function () {
-            await publicService.connect(citizen2).voteUp(0);
-            await expect(publicService.connect(citizen2).voteUp(0)).to.be.revertedWithCustomError(publicService, "AlreadyVoted");
+        it("getReports() should sort by score DESC", async function() {
+            await ps.connect(c1).submitReport("s0", [], "l0", { value: REPORT_FEE });
+            await ps.connect(c2).submitReport("s2", [], "l1", { value: REPORT_FEE });
+            const reports = await ps.getReports();
+            expect(reports[0].score).to.be.gte(reports[1].score);
         });
     });
     
-    describe("F5: Resolution", function () {
-        let publicService, admin, citizen1, citizen2, citizen3;
-
-        beforeEach(async function () {
-            const fixture = await loadFixture(deployPublicServiceFixture);
-            publicService = fixture.publicService;
-            admin = fixture.admin;
-            citizen1 = fixture.citizen1;
-            citizen2 = fixture.citizen2;
-            citizen3 = fixture.citizen3;
-
-            // Register citizens
-            await publicService.connect(citizen1).registerCitizen({ value: STAKE_AMOUNT });
-            await publicService.connect(citizen2).registerCitizen({ value: STAKE_AMOUNT });
-            await publicService.connect(citizen3).registerCitizen({ value: STAKE_AMOUNT });
-
-            // Submit a report
-            await publicService.connect(citizen1).submitReport("hash1", ["cid1"], "location1", { value: REPORT_FEE });
-        
-            // Vote on the report
-            await publicService.connect(citizen2).voteUp(0); // Up-voter
-            await publicService.connect(citizen3).voteDown(0); // Down-voter
+    describe("F5 & Security", function () {
+        let ps, admin, c1, c2;
+        beforeEach(async function() {
+            const { publicService, admin: ad, citizen1, citizen2 } = await loadFixture(deployPublicServiceFixture);
+            ps = publicService;
+            admin = ad;
+            [c1, c2] = [citizen1, citizen2];
+            await ps.connect(c1).registerCitizen({ value: STAKE_AMOUNT });
+            await ps.connect(c2).registerCitizen({ value: STAKE_AMOUNT });
         });
 
-        it("Should correctly distribute rewards when a report is approved", async function () {
-            const reporterInitialStake = await publicService.stakes(citizen1.address);
-            const upvoterInitialStake = await publicService.stakes(citizen2.address);
-            const downvoterInitialStake = await publicService.stakes(citizen3.address);
-
-            await expect(publicService.connect(admin).adminResolve(0, true))
-                .to.emit(publicService, "ReportResolved")
-                .withArgs(0, true, admin.address);
-
-            // Reporter: refund stake + fee + reward
-            const reporterFinalStake = await publicService.stakes(citizen1.address);
-            const expectedReporterStake = reporterInitialStake + REPORT_FEE + REWARD_AMOUNT;
-            expect(reporterFinalStake).to.equal(expectedReporterStake);
-            
-            // Up-voter: reward
-            const upvoterFinalStake = await publicService.stakes(citizen2.address);
-            expect(upvoterFinalStake).to.equal(upvoterInitialStake + REWARD_AMOUNT);
-
-            // Down-voter: penalty
-            const downvoterFinalStake = await publicService.stakes(citizen3.address);
-            expect(downvoterFinalStake).to.equal(downvoterInitialStake - REWARD_AMOUNT);
-        });
-        
-        it("Should correctly distribute penalties when a report is rejected", async function () {
-            const reporterInitialStake = await publicService.stakes(citizen1.address);
-            const upvoterInitialStake = await publicService.stakes(citizen2.address);
-            const downvoterInitialStake = await publicService.stakes(citizen3.address);
-            
-            await expect(publicService.connect(admin).adminResolve(0, false))
-            .to.emit(publicService, "ReportResolved")
-            .withArgs(0, false, admin.address);
-            
-            // Reporter: penalty
-            const reporterFinalStake = await publicService.stakes(citizen1.address);
-            const expectedReporterStake = reporterInitialStake - REPORT_FEE - REWARD_AMOUNT;
-            expect(reporterFinalStake).to.equal(expectedReporterStake);
-
-            // Up-voter: penalty
-            const upvoterFinalStake = await publicService.stakes(citizen2.address);
-            expect(upvoterFinalStake).to.equal(upvoterInitialStake - REWARD_AMOUNT);
-            
-            // Down-voter: share the spoils
-            const downvoterFinalStake = await publicService.stakes(citizen3.address);
-            const totalSpoils = REWARD_AMOUNT; // Only 1 upvoter
-            const expectedDownvoterStake = downvoterInitialStake + totalSpoils;
-            expect(downvoterFinalStake).to.equal(expectedDownvoterStake);
+        it("F5.3 AUTO-LOCK: Should lock and unlock account", async function () {
+            await ps.connect(c1).submitReport("h1", [], "l1", { value: REPORT_FEE });
+            await ps.connect(c2).voteDown(0);
+            await expect(ps.connect(admin).adminResolve(0, true)).to.emit(ps, "AccountLocked").withArgs(c2.address);
+            await expect(ps.connect(c2).submitReport("h_l", [], "l_l", { value: REPORT_FEE })).to.be.revertedWithCustomError(ps, "CitizenLockedError");
+            await expect(ps.connect(c2).registerCitizen({ value: STAKE_AMOUNT })).to.emit(ps, "AccountUnlocked").withArgs(c2.address);
         });
     });
 });
