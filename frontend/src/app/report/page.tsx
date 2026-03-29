@@ -1,21 +1,50 @@
 "use client";
 
 import { Box, Heading, VStack, Button, Text } from "@chakra-ui/react";
-import { useState } from "react";
+import { useEffect, useState } from "react";
 
 import Header from "@/components/header";
 import Footer from "@/components/footer";
 import ReportEditor from "@/components/reportEditor";
+import { getReports, type ReportItem } from "@/lib/api";
+
+type Draft = {
+    id: number;
+    content: string;
+    cids: string[];
+    submitted: boolean;
+};
 
 export default function ReportPage() {
-    const [drafts, setDrafts] = useState<any[]>([]);
-    const [reports, setReports] = useState<any[]>([]);
-    const [selected, setSelected] = useState<any | null>(null);
+    const [drafts, setDrafts] = useState<Draft[]>([]);
+    const [reports, setReports] = useState<ReportItem[]>([]);
+    const [selected, setSelected] = useState<Draft | null>(null);
+
+    const loadReports = async () => {
+        try {
+            const data = await getReports();
+            setReports(data);
+        } catch {
+            // Keep UI usable even if API temporarily fails.
+        }
+    };
+
+    useEffect(() => {
+        const init = async () => {
+            try {
+                const data = await getReports();
+                setReports(data);
+            } catch {
+                // Keep UI usable even if API temporarily fails.
+            }
+        };
+        void init();
+    }, []);
 
     // ======================
     // SAVE DRAFT
     // ======================
-    const handleSaveDraft = (draft: any) => {
+    const handleSaveDraft = (draft: Draft) => {
         setDrafts((prev) => {
             const exists = prev.find((d) => d.id === draft.id);
             if (exists) {
@@ -28,20 +57,19 @@ export default function ReportPage() {
     // ======================
     // SUBMIT SUCCESS
     // ======================
-    const handleSubmitSuccess = (report: any) => {
-        setReports((prev) => [...prev, report]);
+    const handleSubmitSuccess = () => {
+        void loadReports();
 
         // remove khỏi draft list nếu đã submit
-        setDrafts((prev) => prev.filter((d) => d.id !== report.id));
-
         setSelected(null);
+
     };
 
     return (
-        <>
+        <Box minH="100vh" display="flex" flexDirection="column">
             <Header />
 
-            <Box maxW="900px" mx="auto" mt={6}>
+            <Box maxW="900px" mx="auto" mt={6} w="100%" px={4} flex="1">
                 <Heading mb={4}>📢 Quản lý báo cáo vi phạm</Heading>
 
                 {/* EDITOR */}
@@ -75,11 +103,11 @@ export default function ReportPage() {
                 </Heading>
 
                 <VStack align="stretch">
-                    {reports.map((r, i) => (
-                        <Box key={i} borderWidth="1px" p={3}>
+                    {reports.map((r) => (
+                        <Box key={r.id} borderWidth="1px" p={3}>
                             <Text>{r.content}</Text>
                             <Text fontSize="sm" color="gray.500">
-                                {r.cids?.length || 0} ảnh
+                                {r.cids?.length || 0} ảnh | Score: {r.score}
                             </Text>
                         </Box>
                     ))}
@@ -87,6 +115,6 @@ export default function ReportPage() {
             </Box>
 
             <Footer />
-        </>
+        </Box>
     );
 }
