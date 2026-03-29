@@ -7,9 +7,9 @@ import "@openzeppelin/contracts/utils/ReentrancyGuard.sol";
 contract PublicService is AccessControl, ReentrancyGuard {
     bytes32 public constant ADMIN_ROLE = keccak256("ADMIN_ROLE");
 
-    uint256 public constant STAKE_AMOUNT = 1 ether;
-    uint256 public constant REPORT_FEE = 0.01 ether;
-    uint256 public constant REWARD_AMOUNT = 0.1 ether;
+    uint256 public constant STAKE_AMOUNT = 0.05 ether;
+    uint256 public constant REPORT_FEE = 0.001 ether;
+    uint256 public constant REWARD_AMOUNT = 0.0001 ether;
 
     enum Status { Submitted, Approved, Rejected }
 
@@ -26,71 +26,67 @@ contract PublicService is AccessControl, ReentrancyGuard {
     mapping(address => uint256) public stakes;
     mapping(uint256 => Report) public reports;
     uint256 public reportCount;
+    mapping(address => bool) public locked;
 
-    // --- Voting ---
-    // reportId => voter => hasVoted
     mapping(uint256 => mapping(address => bool)) private _hasVoted;
-    // reportId => list of upvoters
     mapping(uint256 => address[]) private _upVoters;
-    // reportId => list of downvoters
     mapping(uint256 => address[]) private _downVoters;
 
-    // --- Events ---
     event CitizenRegistered(address indexed citizen, uint256 stake);
     event ReportSubmitted(uint256 indexed reportId, address indexed reporter);
     event ReportUpdated(uint256 indexed reportId);
     event Voted(uint256 indexed reportId, address indexed voter, bool isUpVote);
     event ReportResolved(uint256 indexed reportId, bool approved, address indexed admin);
     event StakeUpdated(address indexed citizen, uint256 newStake, string reason);
+    event AccountLocked(address indexed citizen);
+    event AccountUnlocked(address indexed citizen);
 
-
-    // --- Custom Errors ---
     error AlreadyRegistered();
     error NotRegistered();
     error InsufficientStake();
     error ReportNotFound();
     error AlreadyVoted();
     error CannotUpdateReport();
-    error InvalidVote();
-    error PaymentFailed();
+    error CitizenLockedError();
 
-    constructor(address admin) {
-        _grantRole(ADMIN_ROLE, admin);
+    constructor() {
+        _grantRole(ADMIN_ROLE, msg.sender);
     }
 
-    // ==========================================
-    // F1: Citizen Registration
-    // ==========================================
     function registerCitizen() external payable {
-        if (stakes[msg.sender] > 0) revert AlreadyRegistered();
+        if (stakes[msg.sender] >= STAKE_AMOUNT && !locked[msg.sender]) revert AlreadyRegistered();
         if (msg.value != STAKE_AMOUNT) revert InsufficientStake();
         
         stakes[msg.sender] = msg.value;
+        if (locked[msg.sender]) {
+            locked[msg.sender] = false;
+            emit AccountUnlocked(msg.sender);
+        }
         emit CitizenRegistered(msg.sender, msg.value);
     }
 
-    // ==========================================
-    // F3: Report Submission & Updates
-    // ==========================================
     function submitReport(string memory contentHash, string[] memory imageCIDs, string memory location) external payable nonReentrant {
+        if (locked[msg.sender]) revert CitizenLockedError();
         if (stakes[msg.sender] < STAKE_AMOUNT) revert NotRegistered();
         if (msg.value != REPORT_FEE) revert InsufficientStake();
 
         uint256 reportId = reportCount++;
-        Report storage report = reports[reportId];
-        report.reporter = msg.sender;
-        report.contentHash = contentHash;
-        report.imageCIDs = imageCIDs;
-        report.location = location;
-        report.status = Status.Submitted;
-        report.timestamp = block.timestamp;
+        reports[reportId] = Report({
+            reporter: msg.sender,
+            contentHash: contentHash,
+            imageCIDs: imageCIDs,
+            location: location,
+            score: 0,
+            status: Status.Submitted,
+            timestamp: block.timestamp
+        });
 
         emit ReportSubmitted(reportId, msg.sender);
     }
 
     function updateReport(uint256 reportId, string memory newContentHash, string[] memory newImageCIDs, string memory newLocation) external {
         Report storage report = reports[reportId];
-        if (report.reporter != msg.sender) revert ReportNotFound(); // Or a more specific error
+        if (report.reporter != msg.sender) revert ReportNotFound();
         if (report.status != Status.Submitted) revert CannotUpdateReport();
 
         report.contentHash = newContentHash;
@@ -102,10 +98,8 @@ contract PublicService is AccessControl, ReentrancyGuard {
         emit ReportUpdated(reportId);
     }
 
-    // ==========================================
-    // F4: Voting
-    // ==========================================
     function vote(uint256 reportId, bool isUpVote) internal {
+        if (locked[msg.sender]) revert CitizenLockedError();
         if (stakes[msg.sender] < STAKE_AMOUNT) revert NotRegistered();
         if (reports[reportId].reporter == address(0)) revert ReportNotFound();
         if (_hasVoted[reportId][msg.sender]) revert AlreadyVoted();
@@ -123,20 +117,12 @@ contract PublicService is AccessControl, ReentrancyGuard {
         emit Voted(reportId, msg.sender, isUpVote);
     }
 
-    function voteUp(uint256 reportId) external {
-        vote(reportId, true);
-    }
+    function voteUp(uint256 reportId) external { vote(reportId, true); }
+    function voteDown(uint256 reportId) external { vote(reportId, false); }
 
-    function voteDown(uint256 reportId) external {
-        vote(reportId, false);
-    }
-
-    // ==========================================
-    // F5: Resolution
-    // ==========================================
     function adminResolve(uint256 reportId, bool approve) external onlyRole(ADMIN_ROLE) nonReentrant {
         Report storage report = reports[reportId];
-        if (report.status != Status.Submitted) revert CannotUpdateReport(); // Report already resolved
+        if (report.status != Status.Submitted) revert CannotUpdateReport();
 
         report.status = approve ? Status.Approved : Status.Rejected;
 
@@ -144,31 +130,43 @@ contract PublicService is AccessControl, ReentrancyGuard {
         address[] memory downvoters = _downVoters[reportId];
 
         if (approve) {
-            // Reporter: refund fee + reward
             stakes[report.reporter] += REPORT_FEE + REWARD_AMOUNT;
             emit StakeUpdated(report.reporter, stakes[report.reporter], "Approved report reward");
-
-            // Up-voters: reward
             for (uint i = 0; i < upvoters.length; i++) {
                 stakes[upvoters[i]] += REWARD_AMOUNT;
                 emit StakeUpdated(upvoters[i], stakes[upvoters[i]], "Correct up-vote reward");
             }
-            // Down-voters: penalty
             for (uint i = 0; i < downvoters.length; i++) {
-                stakes[downvoters[i]] -= REWARD_AMOUNT;
-                emit StakeUpdated(downvoters[i], stakes[downvoters[i]], "Incorrect down-vote penalty");
+                address voter = downvoters[i];
+                if (stakes[voter] >= REWARD_AMOUNT) {
+                    stakes[voter] -= REWARD_AMOUNT;
+                    emit StakeUpdated(voter, stakes[voter], "Incorrect down-vote penalty");
+                    if (stakes[voter] < STAKE_AMOUNT) {
+                        locked[voter] = true;
+                        emit AccountLocked(voter);
+                    }
+                }
             }
-        } else { // Reject
-            // Reporter: penalty
-            stakes[report.reporter] -= (REPORT_FEE + REWARD_AMOUNT);
-            emit StakeUpdated(report.reporter, stakes[report.reporter], "Rejected report penalty");
-
-            // Up-voters: penalty
+        } else {
+            if(stakes[report.reporter] >= (REPORT_FEE + REWARD_AMOUNT)) {
+                stakes[report.reporter] -= (REPORT_FEE + REWARD_AMOUNT);
+                emit StakeUpdated(report.reporter, stakes[report.reporter], "Rejected report penalty");
+                if (stakes[report.reporter] < STAKE_AMOUNT) {
+                    locked[report.reporter] = true;
+                    emit AccountLocked(report.reporter);
+                }
+            }
             for (uint i = 0; i < upvoters.length; i++) {
-                stakes[upvoters[i]] -= REWARD_AMOUNT;
-                emit StakeUpdated(upvoters[i], stakes[upvoters[i]], "Incorrect up-vote penalty");
+                address voter = upvoters[i];
+                if (stakes[voter] >= REWARD_AMOUNT) {
+                    stakes[voter] -= REWARD_AMOUNT;
+                    emit StakeUpdated(voter, stakes[voter], "Incorrect up-vote penalty");
+                    if (stakes[voter] < STAKE_AMOUNT) {
+                        locked[voter] = true;
+                        emit AccountLocked(voter);
+                    }
+                }
             }
-            // Down-voters: share the spoils
             if (downvoters.length > 0) {
                 uint256 totalSpoils = upvoters.length * REWARD_AMOUNT;
                 uint256 share = totalSpoils / downvoters.length;
@@ -178,36 +176,28 @@ contract PublicService is AccessControl, ReentrancyGuard {
                 }
             }
         }
-        
-        // Auto-lock check (simplified)
-        // A real implementation might need a more robust mechanism
-        if (stakes[report.reporter] <= 0) {
-            // Citizen is locked, can't participate until they re-register
-        }
-
         emit ReportResolved(reportId, approve, msg.sender);
     }
 
-    // ==========================================
-    // View Functions
-    // ==========================================
-    function getReport(uint256 reportId) external view returns (Report memory) {
-        return reports[reportId];
-    }
+    function getReport(uint256 reportId) external view returns (Report memory) { return reports[reportId]; }
+    function isLocked(address citizen) external view returns (bool) { return locked[citizen]; }
 
-    function getUpVoters(uint256 reportId) external view returns (address[] memory) {
-        return _upVoters[reportId];
-    }
-    
-    function getDownVoters(uint256 reportId) external view returns (address[] memory) {
-        return _downVoters[reportId];
-    }
-    
-    function hasVoted(uint256 reportId, address voter) external view returns (bool) {
-        return _hasVoted[reportId][voter];
-    }
+    function getReports() external view returns (Report[] memory) {
+        Report[] memory allReports = new Report[](reportCount);
+        for (uint i = 0; i < reportCount; i++) {
+            allReports[i] = reports[i];
+        }
 
-    function supportsInterface(bytes4 interfaceId) public view override(AccessControl) returns (bool) {
-        return super.supportsInterface(interfaceId);
+        for (uint i = 1; i < reportCount; i++) {
+            Report memory key = allReports[i];
+            int256 keyScore = key.score;
+            uint j = i;
+            while (j > 0 && allReports[j-1].score < keyScore) {
+                allReports[j] = allReports[j-1];
+                j--;
+            }
+            allReports[j] = key;
+        }
+        return allReports;
     }
 }
