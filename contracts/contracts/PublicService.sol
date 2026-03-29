@@ -1,92 +1,213 @@
 // SPDX-License-Identifier: MIT
-pragma solidity ^0.8.0;
+pragma solidity ^0.8.20;
 
-contract PublicService {
-    // --- KHAI BÁO CÁC BIẾN CƠ BẢN ---
-    address public admin; // Ví của chính quyền
-    uint256 public marginFeeX = 0.05 ether; // Phí ký quỹ x
-    uint256 public submitFee = 0.005 ether; // Phí gửi báo cáo
-    uint256 public rewardY = 0.01 ether; // Mức thưởng/phạt y
+import "@openzeppelin/contracts/access/AccessControl.sol";
+import "@openzeppelin/contracts/utils/ReentrancyGuard.sol";
 
-    // --- CẤU TRÚC DỮ LIỆU ---
-    struct Citizen {
-        string cccdHash;
-        uint256 marginBalance; // Quỹ x
-        bool isActive;
-    }
+contract PublicService is AccessControl, ReentrancyGuard {
+    bytes32 public constant ADMIN_ROLE = keccak256("ADMIN_ROLE");
+
+    uint256 public constant STAKE_AMOUNT = 1 ether;
+    uint256 public constant REPORT_FEE = 0.01 ether;
+    uint256 public constant REWARD_AMOUNT = 0.1 ether;
+
+    enum Status { Submitted, Approved, Rejected }
 
     struct Report {
-        uint256 id;
-        string imageCID;
         address reporter;
-        int256 score; // Score có thể âm nên dùng int
-        string status; // "Submitted", "Approved", "Rejected"
+        string contentHash;
+        string[] imageCIDs;
+        string location;
+        int256 score;
+        Status status;
+        uint256 timestamp;
     }
 
-    mapping(address => Citizen) public citizens;
+    mapping(address => uint256) public stakes;
     mapping(uint256 => Report) public reports;
     uint256 public reportCount;
 
-    // --- MODIFIER (Phân quyền) ---
-    modifier onlyAdmin() {
-        require(msg.sender == admin, "Chi co chinh quyen moi duoc phep thao tac");
-        _;
-    }
+    // --- Voting ---
+    // reportId => voter => hasVoted
+    mapping(uint256 => mapping(address => bool)) private _hasVoted;
+    // reportId => list of upvoters
+    mapping(uint256 => address[]) private _upVoters;
+    // reportId => list of downvoters
+    mapping(uint256 => address[]) private _downVoters;
 
-    modifier onlyActiveCitizen() {
-        require(citizens[msg.sender].isActive, "Tai khooan chua active");
-        _;
-    }
+    // --- Events ---
+    event CitizenRegistered(address indexed citizen, uint256 stake);
+    event ReportSubmitted(uint256 indexed reportId, address indexed reporter);
+    event ReportUpdated(uint256 indexed reportId);
+    event Voted(uint256 indexed reportId, address indexed voter, bool isUpVote);
+    event ReportResolved(uint256 indexed reportId, bool approved, address indexed admin);
+    event StakeUpdated(address indexed citizen, uint256 newStake, string reason);
 
-    constructor() {
-        admin = msg.sender; // Người deploy hợp đồng mặc định là chính quyền
-    }
 
-    // ==========================================
-    // GIAI ĐOẠN 1 | Đăng ký - Định danh - Onboarding
-    // ==========================================
-    
-    // Yêu cầu: Nộp phí ký quỹ x  và Lưu Hash + Active Tài khoản [cite: 10]
-    function register(string memory _cccdHash) public payable {
-        require(msg.value == marginFeeX, "Chua nop du phi ky quy x");
-        // Logic lưu thông tin và bật isActive = true
-    }
+    // --- Custom Errors ---
+    error AlreadyRegistered();
+    error NotRegistered();
+    error InsufficientStake();
+    error ReportNotFound();
+    error AlreadyVoted();
+    error CannotUpdateReport();
+    error InvalidVote();
+    error PaymentFailed();
 
-    // ==========================================
-    // GIAI ĐOẠN 3 | Submit - Thanh toán - ONCHAIN
-    // ==========================================
-    
-    // Yêu cầu: Nộp phí gửi báo cáo  và cập nhật trạng thái Submitted 
-    function submitReport(string memory _imageCID) public payable onlyActiveCitizen {
-        require(msg.value == submitFee, "Chua nop phi gui bao cao");
-        // Logic tăng reportCount, tạo Report mới, lưu vết bằng chứng lên chuỗi [cite: 34]
+    constructor(address admin) {
+        _grantRole(ADMIN_ROLE, admin);
     }
 
     // ==========================================
-    // GIAI ĐOẠN 4 | Bình chọn - Ưu tiên - Voting ONCHAIN
+    // F1: Citizen Registration
     // ==========================================
-    
-    // Yêu cầu: Thực hiện Vote [cite: 39] (Up -> Score + 1 , Down -> Score - 1 )
-    function voteReport(uint256 _reportId, bool _isUpVote) public onlyActiveCitizen {
-        // Logic kiểm tra tài khoản đã vote chưa, sau đó cộng hoặc trừ score
+    function registerCitizen() external payable {
+        if (stakes[msg.sender] > 0) revert AlreadyRegistered();
+        if (msg.value != STAKE_AMOUNT) revert InsufficientStake();
+        
+        stakes[msg.sender] = msg.value;
+        emit CitizenRegistered(msg.sender, msg.value);
     }
 
     // ==========================================
-    // GIAI ĐOẠN 5 | Thẩm định - Trả thưởng phạt
+    // F3: Report Submission & Updates
     // ==========================================
-    
-    // Yêu cầu: Chính quyền thẩm định sự việc 
-    function resolveReport(uint256 _reportId, bool _isApproved) public onlyAdmin {
-        if (_isApproved) {
-            // Báo cáo ĐÚNG: Nhận lại x + phí gửi + y 
-            // Người Vote Up: Nhận thưởng y 
-            // Người Vote Down: Phạt trừ y từ quỹ x 
+    function submitReport(string memory contentHash, string[] memory imageCIDs, string memory location) external payable nonReentrant {
+        if (stakes[msg.sender] < STAKE_AMOUNT) revert NotRegistered();
+        if (msg.value != REPORT_FEE) revert InsufficientStake();
+
+        uint256 reportId = reportCount++;
+        Report storage report = reports[reportId];
+        report.reporter = msg.sender;
+        report.contentHash = contentHash;
+        report.imageCIDs = imageCIDs;
+        report.location = location;
+        report.status = Status.Submitted;
+        report.timestamp = block.timestamp;
+
+        emit ReportSubmitted(reportId, msg.sender);
+    }
+
+    function updateReport(uint256 reportId, string memory newContentHash, string[] memory newImageCIDs, string memory newLocation) external {
+        Report storage report = reports[reportId];
+        if (report.reporter != msg.sender) revert ReportNotFound(); // Or a more specific error
+        if (report.status != Status.Submitted) revert CannotUpdateReport();
+
+        report.contentHash = newContentHash;
+        report.location = newLocation;
+        for (uint i = 0; i < newImageCIDs.length; i++) {
+            report.imageCIDs.push(newImageCIDs[i]);
+        }
+
+        emit ReportUpdated(reportId);
+    }
+
+    // ==========================================
+    // F4: Voting
+    // ==========================================
+    function vote(uint256 reportId, bool isUpVote) internal {
+        if (stakes[msg.sender] < STAKE_AMOUNT) revert NotRegistered();
+        if (reports[reportId].reporter == address(0)) revert ReportNotFound();
+        if (_hasVoted[reportId][msg.sender]) revert AlreadyVoted();
+
+        _hasVoted[reportId][msg.sender] = true;
+        Report storage report = reports[reportId];
+
+        if (isUpVote) {
+            report.score++;
+            _upVoters[reportId].push(msg.sender);
         } else {
-            // Báo cáo SAI: Mất phí gửi + Phạt trừ y từ x [cite: 55]
-            // ... các logic phạt khác [cite: 56, 57]
+            report.score--;
+            _downVoters[reportId].push(msg.sender);
+        }
+        emit Voted(reportId, msg.sender, isUpVote);
+    }
+
+    function voteUp(uint256 reportId) external {
+        vote(reportId, true);
+    }
+
+    function voteDown(uint256 reportId) external {
+        vote(reportId, false);
+    }
+
+    // ==========================================
+    // F5: Resolution
+    // ==========================================
+    function adminResolve(uint256 reportId, bool approve) external onlyRole(ADMIN_ROLE) nonReentrant {
+        Report storage report = reports[reportId];
+        if (report.status != Status.Submitted) revert CannotUpdateReport(); // Report already resolved
+
+        report.status = approve ? Status.Approved : Status.Rejected;
+
+        address[] memory upvoters = _upVoters[reportId];
+        address[] memory downvoters = _downVoters[reportId];
+
+        if (approve) {
+            // Reporter: refund fee + reward
+            stakes[report.reporter] += REPORT_FEE + REWARD_AMOUNT;
+            emit StakeUpdated(report.reporter, stakes[report.reporter], "Approved report reward");
+
+            // Up-voters: reward
+            for (uint i = 0; i < upvoters.length; i++) {
+                stakes[upvoters[i]] += REWARD_AMOUNT;
+                emit StakeUpdated(upvoters[i], stakes[upvoters[i]], "Correct up-vote reward");
+            }
+            // Down-voters: penalty
+            for (uint i = 0; i < downvoters.length; i++) {
+                stakes[downvoters[i]] -= REWARD_AMOUNT;
+                emit StakeUpdated(downvoters[i], stakes[downvoters[i]], "Incorrect down-vote penalty");
+            }
+        } else { // Reject
+            // Reporter: penalty
+            stakes[report.reporter] -= (REPORT_FEE + REWARD_AMOUNT);
+            emit StakeUpdated(report.reporter, stakes[report.reporter], "Rejected report penalty");
+
+            // Up-voters: penalty
+            for (uint i = 0; i < upvoters.length; i++) {
+                stakes[upvoters[i]] -= REWARD_AMOUNT;
+                emit StakeUpdated(upvoters[i], stakes[upvoters[i]], "Incorrect up-vote penalty");
+            }
+            // Down-voters: share the spoils
+            if (downvoters.length > 0) {
+                uint256 totalSpoils = upvoters.length * REWARD_AMOUNT;
+                uint256 share = totalSpoils / downvoters.length;
+                for (uint i = 0; i < downvoters.length; i++) {
+                    stakes[downvoters[i]] += share;
+                    emit StakeUpdated(downvoters[i], stakes[downvoters[i]], "Correct down-vote reward");
+                }
+            }
         }
         
-        // Kiểm tra Quỹ ký quỹ x 
-        // Nếu x <= 0 -> Khóa tài khoản 
+        // Auto-lock check (simplified)
+        // A real implementation might need a more robust mechanism
+        if (stakes[report.reporter] <= 0) {
+            // Citizen is locked, can't participate until they re-register
+        }
+
+        emit ReportResolved(reportId, approve, msg.sender);
+    }
+
+    // ==========================================
+    // View Functions
+    // ==========================================
+    function getReport(uint256 reportId) external view returns (Report memory) {
+        return reports[reportId];
+    }
+
+    function getUpVoters(uint256 reportId) external view returns (address[] memory) {
+        return _upVoters[reportId];
+    }
+    
+    function getDownVoters(uint256 reportId) external view returns (address[] memory) {
+        return _downVoters[reportId];
+    }
+    
+    function hasVoted(uint256 reportId, address voter) external view returns (bool) {
+        return _hasVoted[reportId][voter];
+    }
+
+    function supportsInterface(bytes4 interfaceId) public view override(AccessControl) returns (bool) {
+        return super.supportsInterface(interfaceId);
     }
 }
