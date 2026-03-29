@@ -104,6 +104,7 @@ export default function VotingPage() {
             {paginatedReports.map((r) => (
               <Box key={r.id} borderWidth="1px" borderRadius="lg" p={4}>
                 <Text mb={2}>{r.content}</Text>
+                <Text fontSize="sm">📍 {r.location}</Text>
 
                 <Text fontSize="sm" color="gray.500">
                   Score: {r.score} | {new Date(r.timestamp).toLocaleString()}

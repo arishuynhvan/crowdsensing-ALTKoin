@@ -106,6 +106,7 @@ export default function ReportPage() {
                     {reports.map((r) => (
                         <Box key={r.id} borderWidth="1px" p={3}>
                             <Text>{r.content}</Text>
+                            <Text fontSize="sm">📍 {r.location}</Text>
                             <Text fontSize="sm" color="gray.500">
                                 {r.cids?.length || 0} ảnh | Score: {r.score}
                             </Text>

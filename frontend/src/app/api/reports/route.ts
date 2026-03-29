@@ -27,6 +27,9 @@ db.exec(`
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     reporter TEXT,
     content TEXT NOT NULL,
+    location_text TEXT NOT NULL,
+    latitude REAL NOT NULL,
+    longitude REAL NOT NULL,
     image_cids TEXT NOT NULL DEFAULT '[]',
     score INTEGER NOT NULL DEFAULT 0,
     status TEXT NOT NULL DEFAULT 'Chờ kiểm duyệt',
@@ -46,6 +49,20 @@ db.exec(`
   );
 `);
 
+const reportColumns = db
+  .prepare("PRAGMA table_info(reports)")
+  .all() as Array<{ name: string }>;
+const reportColumnNames = new Set(reportColumns.map((c) => c.name));
+if (!reportColumnNames.has("location_text")) {
+  db.exec(`ALTER TABLE reports ADD COLUMN location_text TEXT NOT NULL DEFAULT 'Unknown';`);
+}
+if (!reportColumnNames.has("latitude")) {
+  db.exec(`ALTER TABLE reports ADD COLUMN latitude REAL NOT NULL DEFAULT 0;`);
+}
+if (!reportColumnNames.has("longitude")) {
+  db.exec(`ALTER TABLE reports ADD COLUMN longitude REAL NOT NULL DEFAULT 0;`);
+}
+
 function parseImageCids(value: string): string[] {
   try {
     const parsed = JSON.parse(value);
@@ -59,6 +76,9 @@ function normalizeReport(row: {
   id: number;
   reporter: string | null;
   content: string;
+  location_text: string;
+  latitude: number;
+  longitude: number;
   image_cids: string;
   score: number;
   status: string;
@@ -70,6 +90,9 @@ function normalizeReport(row: {
     id: row.id,
     reporter: row.reporter,
     content: row.content,
+    location: row.location_text,
+    latitude: row.latitude,
+    longitude: row.longitude,
     cids: parseImageCids(row.image_cids),
     score: row.score,
     status: row.status,
@@ -91,6 +114,7 @@ export async function GET() {
   const rows = db
     .prepare(
       `SELECT id, reporter, content, image_cids, score, status, timestamp, onchain_report_id, last_tx_hash
+             , location_text, latitude, longitude
        FROM reports
        ORDER BY score DESC, timestamp DESC`
     )
@@ -98,6 +122,9 @@ export async function GET() {
     id: number;
     reporter: string | null;
     content: string;
+    location_text: string;
+    latitude: number;
+    longitude: number;
     image_cids: string;
     score: number;
     status: string;
@@ -111,22 +138,35 @@ export async function GET() {
 
 export async function POST(req: NextRequest) {
   try {
-    const { content, cids, reporter, onchainReportId, txHash } = await req.json();
+    const { content, cids, reporter, onchainReportId, txHash, location, latitude, longitude } =
+      await req.json();
 
     if (!content || typeof content !== "string" || !content.trim()) {
       return NextResponse.json({ error: "Nội dung báo cáo là bắt buộc." }, { status: 400 });
+    }
+    if (!location || typeof location !== "string" || !location.trim()) {
+      return NextResponse.json({ error: "Vị trí là bắt buộc." }, { status: 400 });
+    }
+    if (typeof latitude !== "number" || typeof longitude !== "number") {
+      return NextResponse.json({ error: "Tọa độ lat/lng không hợp lệ." }, { status: 400 });
     }
 
     const imageCids = Array.isArray(cids) ? cids : [];
     const timestamp = Date.now();
     const info = db
       .prepare(
-        `INSERT INTO reports (reporter, content, image_cids, score, status, timestamp, onchain_report_id, last_tx_hash)
-         VALUES (?, ?, ?, 0, 'Chờ kiểm duyệt', ?, ?, ?)`
+        `INSERT INTO reports (
+          reporter, content, location_text, latitude, longitude,
+          image_cids, score, status, timestamp, onchain_report_id, last_tx_hash
+        )
+         VALUES (?, ?, ?, ?, ?, ?, 0, 'Chờ kiểm duyệt', ?, ?, ?)`
       )
       .run(
         reporter ?? null,
         content.trim(),
+        location.trim(),
+        latitude,
+        longitude,
         JSON.stringify(imageCids),
         timestamp,
         Number.isInteger(onchainReportId) ? onchainReportId : null,
@@ -135,13 +175,16 @@ export async function POST(req: NextRequest) {
 
     const row = db
       .prepare(
-        `SELECT id, reporter, content, image_cids, score, status, timestamp, onchain_report_id, last_tx_hash
+        `SELECT id, reporter, content, location_text, latitude, longitude, image_cids, score, status, timestamp, onchain_report_id, last_tx_hash
          FROM reports WHERE id = ?`
       )
       .get(info.lastInsertRowid) as {
       id: number;
       reporter: string | null;
       content: string;
+      location_text: string;
+      latitude: number;
+      longitude: number;
       image_cids: string;
       score: number;
       status: string;
@@ -169,6 +212,7 @@ export async function PATCH(req: NextRequest) {
     const existing = db
       .prepare(
         `SELECT id, reporter, content, image_cids, score, status, timestamp, onchain_report_id, last_tx_hash
+             , location_text, latitude, longitude
          FROM reports WHERE id = ?`
       )
       .get(reportId) as
@@ -176,6 +220,9 @@ export async function PATCH(req: NextRequest) {
           id: number;
           reporter: string | null;
           content: string;
+          location_text: string;
+          latitude: number;
+          longitude: number;
           image_cids: string;
           score: number;
           status: string;
@@ -234,12 +281,16 @@ export async function PATCH(req: NextRequest) {
     const updated = db
       .prepare(
         `SELECT id, reporter, content, image_cids, score, status, timestamp, onchain_report_id, last_tx_hash
+             , location_text, latitude, longitude
          FROM reports WHERE id = ?`
       )
       .get(reportId) as {
       id: number;
       reporter: string | null;
       content: string;
+      location_text: string;
+      latitude: number;
+      longitude: number;
       image_cids: string;
       score: number;
       status: string;

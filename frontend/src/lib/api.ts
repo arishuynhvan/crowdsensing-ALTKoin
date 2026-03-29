@@ -11,6 +11,9 @@ export type ReportItem = {
   id: number;
   reporter: string | null;
   content: string;
+  location: string;
+  latitude: number;
+  longitude: number;
   cids: string[];
   score: number;
   status: string;
@@ -132,7 +135,9 @@ async function voteOnchain(params: {
 export async function submitReport(data: {
   content: string;
   cids: string[];
-  location?: string;
+  location: string;
+  latitude: number;
+  longitude: number;
   reporter?: string;
 }) {
   let onchain: { onchainReportId: number; txHash: string } | null = null;
@@ -141,7 +146,7 @@ export async function submitReport(data: {
     onchain = await submitReportOnchain({
       content: data.content,
       cids: data.cids,
-      location: data.location ?? "Unknown",
+      location: data.location,
     });
   } catch {
     onchain = null;
@@ -156,6 +161,9 @@ export async function submitReport(data: {
     body: JSON.stringify({
       content: data.content,
       cids: data.cids,
+      location: data.location,
+      latitude: data.latitude,
+      longitude: data.longitude,
       reporter: data.reporter ?? null,
       onchainReportId: onchain?.onchainReportId ?? null,
       txHash: onchain?.txHash ?? null,

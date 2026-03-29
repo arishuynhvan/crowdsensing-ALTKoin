@@ -45,7 +45,7 @@ export default function Header() {
                     </HStack>
                 </HStack>
 
-                <Button size="sm" colorScheme="red" variant="outline" onClick={handleLogout}>
+                <Button size="sm" colorScheme="red" onClick={handleLogout}>
                     Đăng xuất
                 </Button>
             </Flex>
