@@ -5,6 +5,7 @@ import { useEffect, useMemo, useState } from "react";
 
 import Header from "@/components/header";
 import Footer from "@/components/footer";
+import RoleGate from "@/components/roleGate";
 import { getReports, voteReport, type ReportItem } from "@/lib/api";
 
 type SortBy = "score" | "time";
@@ -79,8 +80,9 @@ export default function VotingPage() {
   };
 
   return (
-    <Box minH="100vh" display="flex" flexDirection="column">
-      <Header />
+    <RoleGate allowedRoles={["CIT"]}>
+      <Box minH="100vh" display="flex" flexDirection="column">
+        <Header />
 
       <Box maxW="800px" mx="auto" mt={6} w="100%" px={4} flex="1">
         <Heading mb={4}>📊 Danh sách báo cáo</Heading>
@@ -181,7 +183,8 @@ export default function VotingPage() {
         </HStack>
       </Box>
 
-      <Footer />
-    </Box>
+        <Footer />
+      </Box>
+    </RoleGate>
   );
 }

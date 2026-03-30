@@ -5,6 +5,7 @@ import { Box, Heading, Text, VStack } from "@chakra-ui/react";
 import { getWallet } from "@/lib/api";
 import Header from "@/components/header";
 import Footer from "@/components/footer";
+import RoleGate from "@/components/roleGate";
 
 type WalletData = {
   balance: number;
@@ -27,8 +28,9 @@ export default function WalletPage() {
   }, []);
 
   return (
-    <Box minH="100vh" display="flex" flexDirection="column">
-      <Header />
+    <RoleGate allowedRoles={["CIT"]}>
+      <Box minH="100vh" display="flex" flexDirection="column">
+        <Header />
 
       <Box maxW="800px" mx="auto" mt={6} w="100%" px={4} flex="1">
         <Heading mb={4}>💰 Ví của bạn</Heading>
@@ -51,7 +53,8 @@ export default function WalletPage() {
         )}
       </Box>
 
-      <Footer />
-    </Box>
+        <Footer />
+      </Box>
+    </RoleGate>
   );
 }

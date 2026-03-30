@@ -5,6 +5,7 @@ import { Box, Heading, Text, Button, VStack, HStack } from "@chakra-ui/react";
 import { getReports, approveReport, rejectReport, type ReportItem } from "@/lib/api";
 import Header from "@/components/header";
 import Footer from "@/components/footer";
+import RoleGate from "@/components/roleGate";
 
 export default function GovPage() {
   const [reports, setReports] = useState<ReportItem[]>([]);
@@ -43,8 +44,9 @@ export default function GovPage() {
   };
 
   return (
-    <Box minH="100vh" display="flex" flexDirection="column">
-      <Header />
+    <RoleGate allowedRoles={["GOV"]}>
+      <Box minH="100vh" display="flex" flexDirection="column">
+        <Header />
 
       <Box maxW="900px" mx="auto" mt={6} w="100%" px={4} flex="1">
         <Heading mb={4}>🛠 Gov - Duyệt báo cáo</Heading>
@@ -86,7 +88,8 @@ export default function GovPage() {
         </VStack>
       </Box>
 
-      <Footer />
-    </Box>
+        <Footer />
+      </Box>
+    </RoleGate>
   );
 }

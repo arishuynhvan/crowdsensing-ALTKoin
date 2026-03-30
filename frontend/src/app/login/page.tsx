@@ -72,7 +72,7 @@ export default function LoginPage() {
 
                 localStorage.setItem("user", JSON.stringify(data.user));
                 if (data.user.role === "GOV") {
-                    router.replace("/authenticate");
+                    router.replace("/admin");
                 } else {
                     router.replace("/voting");
                 }
@@ -118,7 +118,7 @@ export default function LoginPage() {
             localStorage.setItem("user", JSON.stringify(user));
 
             if (user.role === "GOV") {
-                router.push("/authenticate");
+                router.push("/admin");
             } else {
                 router.push("/voting");
             }

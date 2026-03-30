@@ -137,14 +137,6 @@ function normalizeReport(row: {
   };
 }
 
-function getSessionVoter(req: NextRequest): string | null {
-  const token = req.cookies.get("auth_token")?.value;
-  if (!token) return null;
-  const user = getUserBySessionToken(token);
-  if (!user) return null;
-  return user.walletAddress || user.identifier;
-}
-
 export async function GET() {
   const rows = db
     .prepare(
@@ -183,6 +175,12 @@ export async function POST(req: NextRequest) {
     const sessionUser = token ? getUserBySessionToken(token) : null;
     if (!sessionUser) {
       return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+    }
+    if (sessionUser.role !== "CIT") {
+      return NextResponse.json(
+        { error: "Chỉ công dân mới được gửi báo cáo." },
+        { status: 403 }
+      );
     }
 
     const {
@@ -297,6 +295,12 @@ export async function POST(req: NextRequest) {
 
 export async function PATCH(req: NextRequest) {
   try {
+    const token = req.cookies.get("auth_token")?.value;
+    const sessionUser = token ? getUserBySessionToken(token) : null;
+    if (!sessionUser) {
+      return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+    }
+
     const body = await req.json();
     const action = body?.action as "vote" | "resolve" | undefined;
     const reportId = Number(body?.id);
@@ -339,36 +343,46 @@ export async function PATCH(req: NextRequest) {
     }
 
     if (action === "vote") {
+      if (sessionUser.role !== "CIT") {
+        return NextResponse.json(
+          { error: "Chỉ công dân mới được bỏ phiếu." },
+          { status: 403 }
+        );
+      }
       const type = body?.type as VoteType;
-      const voter = getSessionVoter(req);
+      const voter = sessionUser.walletAddress || sessionUser.identifier;
       const txHash = typeof body?.txHash === "string" ? body.txHash : null;
 
       if (type !== "up" && type !== "down") {
         return NextResponse.json({ error: "Loại vote không hợp lệ." }, { status: 400 });
       }
 
-      if (voter) {
-        const voted = db
-          .prepare("SELECT id FROM report_votes WHERE report_id = ? AND voter = ? LIMIT 1")
-          .get(reportId, voter) as { id: number } | undefined;
+      const voted = db
+        .prepare("SELECT id FROM report_votes WHERE report_id = ? AND voter = ? LIMIT 1")
+        .get(reportId, voter) as { id: number } | undefined;
 
-        if (voted) {
-          return NextResponse.json(
-            { error: "Bạn đã vote báo cáo này rồi." },
-            { status: 409 }
-          );
-        }
-
-        db.prepare(
-          "INSERT INTO report_votes (report_id, voter, vote_type) VALUES (?, ?, ?)"
-        ).run(reportId, voter, type);
+      if (voted) {
+        return NextResponse.json(
+          { error: "Bạn đã vote báo cáo này rồi." },
+          { status: 409 }
+        );
       }
+
+      db.prepare(
+        "INSERT INTO report_votes (report_id, voter, vote_type) VALUES (?, ?, ?)"
+      ).run(reportId, voter, type);
 
       const delta = type === "up" ? 1 : -1;
       db.prepare(
         "UPDATE reports SET score = score + ?, last_tx_hash = COALESCE(?, last_tx_hash) WHERE id = ?"
       ).run(delta, txHash, reportId);
     } else if (action === "resolve") {
+      if (sessionUser.role !== "GOV") {
+        return NextResponse.json(
+          { error: "Chỉ admin mới được duyệt báo cáo." },
+          { status: 403 }
+        );
+      }
       const decision = body?.decision as ResolveDecision;
       if (decision !== "approve" && decision !== "reject") {
         return NextResponse.json({ error: "Quyết định không hợp lệ." }, { status: 400 });
