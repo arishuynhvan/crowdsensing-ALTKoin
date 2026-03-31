@@ -2,8 +2,8 @@
   "_format": "hh-sol-cache-2",
   "files": {
     "/home/an/Documents/crowdsensing-ALTKoin/contracts/contracts/PublicService.sol": {
-      "lastModificationDate": 1774785295991,
-      "contentHash": "f6504e36163e466f84b8d82ecddb31fd",
+      "lastModificationDate": 1774918476978,
+      "contentHash": "14c483690234601288b1b34f83ce882b",
       "sourceName": "contracts/PublicService.sol",
       "solcConfig": {
         "version": "0.8.24",

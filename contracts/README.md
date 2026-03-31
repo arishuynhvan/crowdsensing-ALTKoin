@@ -163,3 +163,11 @@ Deployed Addresses
 
 PublicServiceModule#PublicService - 0xE1125a60CD4EdE61c0F21f9172d3a5eC67Ed10d2
 https://sepolia.etherscan.io/address/0xE1125a60CD4EdE61c0F21f9172d3a5eC67Ed10d2#code
+
+Contract deployed to Sepolia successfully.
+
+###### Final
+
+Deployer: 0x4570FDbd50e25C1E80836e73099b4f7BFABDEbd6
+New PublicService address: 0xa8A0BF6dcCF2113d49306E24B9a98Cf8D7DF32D1
+Explorer: https://sepolia.etherscan.io/address/0xa8A0BF6dcCF2113d49306E24B9a98Cf8D7DF32D1

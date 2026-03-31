@@ -154,4 +154,127 @@ describe("PublicService", function () {
             await expect(ps.connect(c2).registerCitizen({ value: STAKE_AMOUNT })).to.emit(ps, "AccountUnlocked").withArgs(c2.address);
         });
     });
+
+    describe("Treasury & Resolution Accounting", function () {
+        it("Tracks direct treasury funding through receive()", async function () {
+            const { publicService, admin } = await loadFixture(deployPublicServiceFixture);
+            const funding = ethers.parseEther("0.005");
+
+            await expect(
+                admin.sendTransaction({ to: await publicService.getAddress(), value: funding })
+            )
+                .to.emit(publicService, "TreasuryFunded")
+                .withArgs(admin.address, funding, funding);
+
+            expect(await publicService.treasuryBalance()).to.equal(funding);
+        });
+
+        it("Treats REPORT_FEE as treasury income and report pool on submit", async function () {
+            const { publicService, citizen1 } = await loadFixture(deployPublicServiceFixture);
+            await publicService.connect(citizen1).registerCitizen({ value: STAKE_AMOUNT });
+
+            await expect(
+                publicService.connect(citizen1).submitReport("h1", [], "l1", { value: REPORT_FEE })
+            )
+                .to.emit(publicService, "ReportFeeCollected")
+                .withArgs(0, citizen1.address, REPORT_FEE, REPORT_FEE);
+
+            expect(await publicService.reportPools(0)).to.equal(REPORT_FEE);
+            expect(await publicService.treasuryBalance()).to.equal(REPORT_FEE);
+        });
+
+        it("Validates reportId existence before resolution logic", async function () {
+            const { publicService, admin } = await loadFixture(deployPublicServiceFixture);
+            await expect(publicService.connect(admin).adminResolve(999, true)).to.be.revertedWithCustomError(
+                publicService,
+                "ReportNotFound"
+            );
+        });
+
+        it("Approve flow pays admin/reporter/winners and slashes incorrect voters from stake balances", async function () {
+            const { publicService, admin, citizen1, citizen2, citizen3 } = await loadFixture(deployPublicServiceFixture);
+            const funding = ethers.parseEther("0.005");
+
+            await publicService.connect(citizen1).registerCitizen({ value: STAKE_AMOUNT });
+            await publicService.connect(citizen2).registerCitizen({ value: STAKE_AMOUNT });
+            await publicService.connect(citizen3).registerCitizen({ value: STAKE_AMOUNT });
+            await admin.sendTransaction({ to: await publicService.getAddress(), value: funding });
+
+            await publicService.connect(citizen1).submitReport("h1", [], "l1", { value: REPORT_FEE });
+            await publicService.connect(citizen2).voteUp(0);
+            await publicService.connect(citizen3).voteDown(0);
+
+            const reporterBefore = await ethers.provider.getBalance(citizen1.address);
+            const winnerBefore = await ethers.provider.getBalance(citizen2.address);
+
+            await expect(publicService.connect(admin).adminResolve(0, true))
+                .to.emit(publicService, "AdminFeePaid")
+                .withArgs(0, admin.address, REWARD_AMOUNT);
+
+            await expect(publicService.connect(admin).adminResolve(0, true)).to.be.revertedWithCustomError(
+                publicService,
+                "CannotUpdateReport"
+            );
+
+            expect(await publicService.isLocked(citizen3.address)).to.equal(true);
+            expect(await publicService.stakes(citizen3.address)).to.equal(STAKE_AMOUNT - REWARD_AMOUNT);
+
+            const reporterAfter = await ethers.provider.getBalance(citizen1.address);
+            const winnerAfter = await ethers.provider.getBalance(citizen2.address);
+            expect(reporterAfter - reporterBefore).to.equal(REPORT_FEE + REWARD_AMOUNT);
+            expect(winnerAfter - winnerBefore).to.equal(REWARD_AMOUNT);
+        });
+
+        it("Top ups winner rewards from common treasury when report pool is below nominal target", async function () {
+            const { publicService, admin, citizen1, citizen2, citizen3 } = await loadFixture(deployPublicServiceFixture);
+            const funding = ethers.parseEther("0.005");
+
+            await publicService.connect(citizen1).registerCitizen({ value: STAKE_AMOUNT });
+            await publicService.connect(citizen2).registerCitizen({ value: STAKE_AMOUNT });
+            await publicService.connect(citizen3).registerCitizen({ value: STAKE_AMOUNT });
+            await admin.sendTransaction({ to: await publicService.getAddress(), value: funding });
+
+            await publicService.connect(citizen1).submitReport("h1", [], "l1", { value: REPORT_FEE });
+            await publicService.connect(citizen2).voteUp(0);
+            await publicService.connect(citizen3).voteUp(0);
+
+            const winner1Before = await ethers.provider.getBalance(citizen2.address);
+            const winner2Before = await ethers.provider.getBalance(citizen3.address);
+
+            await expect(publicService.connect(admin).adminResolve(0, true))
+                .to.emit(publicService, "VoterRewardsDistributed")
+                .withArgs(0, true, REWARD_AMOUNT * 2n, REWARD_AMOUNT, 2);
+
+            const winner1After = await ethers.provider.getBalance(citizen2.address);
+            const winner2After = await ethers.provider.getBalance(citizen3.address);
+            expect(winner1After - winner1Before).to.equal(REWARD_AMOUNT);
+            expect(winner2After - winner2Before).to.equal(REWARD_AMOUNT);
+        });
+
+        it("Reject flow keeps report fee as treasury income, slashes incorrect side, and distributes resolved pool", async function () {
+            const { publicService, admin, citizen1, citizen2, citizen3 } = await loadFixture(deployPublicServiceFixture);
+
+            await publicService.connect(citizen1).registerCitizen({ value: STAKE_AMOUNT });
+            await publicService.connect(citizen2).registerCitizen({ value: STAKE_AMOUNT });
+            await publicService.connect(citizen3).registerCitizen({ value: STAKE_AMOUNT });
+
+            await publicService.connect(citizen1).submitReport("h1", [], "l1", { value: REPORT_FEE });
+            await publicService.connect(citizen2).voteUp(0);
+            await publicService.connect(citizen3).voteDown(0);
+
+            const winnerBefore = await ethers.provider.getBalance(citizen3.address);
+
+            await expect(publicService.connect(admin).adminResolve(0, false))
+                .to.emit(publicService, "ReporterRefunded")
+                .withArgs(0, citizen1.address, 0, false);
+
+            expect(await publicService.stakes(citizen1.address)).to.equal(STAKE_AMOUNT - REWARD_AMOUNT);
+            expect(await publicService.stakes(citizen2.address)).to.equal(STAKE_AMOUNT - REWARD_AMOUNT);
+            expect(await publicService.isLocked(citizen1.address)).to.equal(true);
+            expect(await publicService.isLocked(citizen2.address)).to.equal(true);
+
+            const winnerAfter = await ethers.provider.getBalance(citizen3.address);
+            expect(winnerAfter - winnerBefore).to.equal(REPORT_FEE + REWARD_AMOUNT);
+        });
+    });
 });
