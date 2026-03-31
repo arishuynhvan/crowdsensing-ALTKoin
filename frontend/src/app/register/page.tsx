@@ -2,8 +2,10 @@
 
 
 import { Box, Text, Button, VStack, Heading } from "@chakra-ui/react";
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
+import { createPublicClient, formatEther, http, parseAbi } from "viem";
+import { sepolia } from "viem/chains";
 
 
 // IMPORT COMPONENT
@@ -89,8 +91,48 @@ export default function RegisterPage() {
     const depositValue = Number(deposit);
     const isValidDeposit = Number.isInteger(depositValue) && depositValue >= 1;
     const VND_PER_ETH = Number(process.env.NEXT_PUBLIC_VND_PER_ETH ?? 100000000);
-    const [stakeEthDisplay] = useState("0.05");
-    const [minDepositVnd] = useState(Math.ceil(0.05 * VND_PER_ETH));
+    const fallbackStakeEth = process.env.NEXT_PUBLIC_STAKE_AMOUNT_ETH ?? "0.00002";
+    const [stakeEthDisplay, setStakeEthDisplay] = useState(fallbackStakeEth);
+    const [minDepositVnd, setMinDepositVnd] = useState(
+        Math.ceil(Number(fallbackStakeEth) * VND_PER_ETH)
+    );
+
+    useEffect(() => {
+        const loadStakeAmount = async () => {
+            try {
+                const contractAddress =
+                    process.env.NEXT_PUBLIC_PUBLIC_SERVICE_ADDRESS ??
+                    process.env.NEXT_PUBLIC_PUBLIC_SERVICE;
+                const rpcUrl =
+                    process.env.NEXT_PUBLIC_SEPOLIA_RPC_URL ??
+                    process.env.NEXT_PUBLIC_SEPOLIA_RPC;
+                if (!contractAddress || !rpcUrl || !/^0x[a-fA-F0-9]{40}$/.test(contractAddress)) {
+                    return;
+                }
+
+                const publicClient = createPublicClient({
+                    chain: sepolia,
+                    transport: http(rpcUrl),
+                });
+                const abi = parseAbi(["function STAKE_AMOUNT() view returns (uint256)"]);
+                const stakeAmount = await publicClient.readContract({
+                    address: contractAddress as `0x${string}`,
+                    abi,
+                    functionName: "STAKE_AMOUNT",
+                });
+                const stakeEth = formatEther(stakeAmount);
+                const parsedStake = Number(stakeEth);
+                if (!Number.isFinite(parsedStake) || parsedStake <= 0) return;
+
+                setStakeEthDisplay(stakeEth);
+                setMinDepositVnd(Math.ceil(parsedStake * VND_PER_ETH));
+            } catch {
+                // keep fallback from env when on-chain read is unavailable
+            }
+        };
+
+        void loadStakeAmount();
+    }, [VND_PER_ETH]);
 
 
     // ======================

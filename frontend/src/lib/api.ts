@@ -49,15 +49,65 @@ const RPC_URL = RPC_URL_RAW.trim();
 const FALLBACK_REPORT_FEE_ETH = process.env.NEXT_PUBLIC_REPORT_FEE_ETH ?? "0.001";
 
 const publicServiceAbi = parseAbi([
+  "error AlreadyRegistered()",
+  "error NotRegistered()",
+  "error InsufficientStake()",
+  "error ReportNotFound()",
+  "error AlreadyVoted()",
+  "error CannotUpdateReport()",
+  "error CitizenLockedError()",
+  "error InvalidEconomicParams()",
+  "error TransferFailed()",
   "function REPORT_FEE() view returns (uint256)",
   "function STAKE_AMOUNT() view returns (uint256)",
   "function reportCount() view returns (uint256)",
   "function stakes(address) view returns (uint256)",
   "function locked(address) view returns (bool)",
+  "function treasuryBalance() view returns (uint256)",
   "function submitReport(string contentHash, string[] imageCIDs, string location) payable",
   "function voteUp(uint256 reportId)",
   "function voteDown(uint256 reportId)",
+  "function adminResolve(uint256 reportId, bool approve)",
 ]);
+
+export type WalletSummary = {
+  walletAddress: string | null;
+  role: string | null;
+  requiredStakeEth: string;
+  citizenStakeEth: string;
+  walletEth: string;
+  isLocked: boolean;
+  canSubmitReport: boolean;
+  history: string[];
+};
+
+export type TreasurySummary = {
+  treasuryEth: string;
+  contractEth: string;
+  contractAddress: string | null;
+  contractUrl: string | null;
+  readContractUrl: string | null;
+};
+
+function mapContractError(err: unknown, fallback: string): string {
+  if (!(err instanceof Error)) return fallback;
+  const msg = err.message || "";
+
+  if (msg.includes("AlreadyVoted")) {
+    return "Bạn đã vote báo cáo này trên smart contract rồi.";
+  }
+  if (msg.includes("NotRegistered")) {
+    return "Bạn chưa đủ stake/đăng ký để vote trên smart contract.";
+  }
+  if (msg.includes("CitizenLockedError")) {
+    return "Tài khoản của bạn đang bị khóa trên smart contract.";
+  }
+  if (msg.includes("ReportNotFound")) {
+    return "Báo cáo on-chain không tồn tại hoặc sai reportId.";
+  }
+
+  return fallback;
+}
 
 function getInjectedProvider() {
   if (typeof window === "undefined") return null;
@@ -168,7 +218,7 @@ async function submitReportOnchain(data: {
     functionName: "reportCount",
   });
 
-  const fallbackStakeEth = process.env.NEXT_PUBLIC_STAKE_AMOUNT_ETH ?? "0.05";
+  const fallbackStakeEth = process.env.NEXT_PUBLIC_STAKE_AMOUNT_ETH ?? "0.00002";
   let stakeAmount: bigint | null = null;
   let currentStake: bigint | null = null;
   let isLocked: boolean | null = null;
@@ -276,6 +326,44 @@ async function voteOnchain(params: {
   const hash = await walletClient.writeContract(request);
   await publicClient.waitForTransactionReceipt({ hash });
 
+  return hash;
+}
+
+async function resolveReportOnchain(params: {
+  onchainReportId: number;
+  approve: boolean;
+}): Promise<string> {
+  const provider = getInjectedProvider();
+  if (!provider || !PUBLIC_SERVICE_ADDRESS) {
+    throw new Error("Không tìm thấy ví web3 hoặc cấu hình contract.");
+  }
+  await ensureSepoliaChain(provider);
+
+  const walletClient = createWalletClient({
+    chain: sepolia,
+    transport: custom(provider),
+  });
+  const publicClient = createPublicClient({
+    chain: sepolia,
+    transport: http(RPC_URL),
+  });
+
+  const addresses = await walletClient.requestAddresses();
+  const account = addresses[0];
+  if (!account) {
+    throw new Error("Không lấy được địa chỉ ví admin từ trình duyệt.");
+  }
+
+  const { request } = await publicClient.simulateContract({
+    address: PUBLIC_SERVICE_ADDRESS,
+    abi: publicServiceAbi,
+    functionName: "adminResolve",
+    args: [BigInt(params.onchainReportId), params.approve],
+    account,
+  });
+
+  const hash = await walletClient.writeContract(request);
+  await publicClient.waitForTransactionReceipt({ hash });
   return hash;
 }
 
@@ -405,7 +493,11 @@ export async function voteReport(id: number, type: VoteType, onchainReportId?: n
   let txHash: string | null = null;
 
   if (typeof onchainReportId === "number") {
-    txHash = await voteOnchain({ onchainReportId, type });
+    try {
+      txHash = await voteOnchain({ onchainReportId, type });
+    } catch (err) {
+      throw new Error(mapContractError(err, "Vote on-chain thất bại."));
+    }
   }
 
   const res = await fetch("/api/reports", {
@@ -431,6 +523,16 @@ export async function voteReport(id: number, type: VoteType, onchainReportId?: n
 }
 
 export async function approveReport(id: number) {
+  const reports = await getReports();
+  const report = reports.find((r) => r.id === id);
+  if (!report || typeof report.onchainReportId !== "number") {
+    throw new Error("Báo cáo chưa có on-chain report id hợp lệ để duyệt.");
+  }
+  const txHash = await resolveReportOnchain({
+    onchainReportId: report.onchainReportId,
+    approve: true,
+  });
+
   const res = await fetch("/api/reports", {
     method: "PATCH",
     headers: {
@@ -441,6 +543,7 @@ export async function approveReport(id: number) {
       action: "resolve",
       id,
       decision: "approve",
+      txHash,
     }),
   });
 
@@ -452,6 +555,16 @@ export async function approveReport(id: number) {
 }
 
 export async function rejectReport(id: number) {
+  const reports = await getReports();
+  const report = reports.find((r) => r.id === id);
+  if (!report || typeof report.onchainReportId !== "number") {
+    throw new Error("Báo cáo chưa có on-chain report id hợp lệ để từ chối.");
+  }
+  const txHash = await resolveReportOnchain({
+    onchainReportId: report.onchainReportId,
+    approve: false,
+  });
+
   const res = await fetch("/api/reports", {
     method: "PATCH",
     headers: {
@@ -462,6 +575,7 @@ export async function rejectReport(id: number) {
       action: "resolve",
       id,
       decision: "reject",
+      txHash,
     }),
   });
 
@@ -478,14 +592,120 @@ export async function getWallet() {
     credentials: "include",
   });
   if (!res.ok) {
-    return { balance: 0, history: [] as string[] };
+    return {
+      walletAddress: null,
+      role: null,
+      requiredStakeEth: "0",
+      citizenStakeEth: "0",
+      walletEth: "0",
+      isLocked: false,
+      canSubmitReport: false,
+      history: [] as string[],
+    } as WalletSummary;
   }
 
   const payload = await res.json();
+  const walletAddress = payload?.user?.walletAddress as `0x${string}` | undefined;
+  const role = (payload?.user?.role as string | undefined) ?? null;
+  if (!walletAddress || !PUBLIC_SERVICE_ADDRESS) {
+    return {
+      walletAddress: walletAddress ?? null,
+      role,
+      requiredStakeEth: "0",
+      citizenStakeEth: "0",
+      walletEth: "0",
+      isLocked: false,
+      canSubmitReport: false,
+      history: payload?.user
+        ? [`Ví: ${payload.user.walletAddress}`, `Vai trò: ${payload.user.role}`]
+        : [],
+    } as WalletSummary;
+  }
+
+  const publicClient = createPublicClient({
+    chain: sepolia,
+    transport: http(RPC_URL),
+  });
+
+  let requiredStake = 0n;
+  let citizenStake = 0n;
+  let walletEth = 0n;
+  let isLocked = false;
+  try {
+    requiredStake = await publicClient.readContract({
+      address: PUBLIC_SERVICE_ADDRESS,
+      abi: publicServiceAbi,
+      functionName: "STAKE_AMOUNT",
+    });
+    citizenStake = await publicClient.readContract({
+      address: PUBLIC_SERVICE_ADDRESS,
+      abi: publicServiceAbi,
+      functionName: "stakes",
+      args: [walletAddress],
+    });
+    isLocked = await publicClient.readContract({
+      address: PUBLIC_SERVICE_ADDRESS,
+      abi: publicServiceAbi,
+      functionName: "locked",
+      args: [walletAddress],
+    });
+    walletEth = await publicClient.getBalance({ address: walletAddress });
+  } catch {
+    // keep fallback zero values if RPC temporarily fails
+  }
+
+  const canSubmitReport = !isLocked && citizenStake >= requiredStake && requiredStake > 0n;
   return {
-    balance: payload?.user?.isActive ? 1 : 0,
+    walletAddress,
+    role,
+    requiredStakeEth: formatEther(requiredStake),
+    citizenStakeEth: formatEther(citizenStake),
+    walletEth: formatEther(walletEth),
+    isLocked,
+    canSubmitReport,
     history: payload?.user
       ? [`Ví: ${payload.user.walletAddress}`, `Vai trò: ${payload.user.role}`]
       : [],
+  } as WalletSummary;
+}
+
+export async function getTreasurySummary(): Promise<TreasurySummary> {
+  if (!PUBLIC_SERVICE_ADDRESS) {
+    return {
+      treasuryEth: "0",
+      contractEth: "0",
+      contractAddress: null,
+      contractUrl: null,
+      readContractUrl: null,
+    };
+  }
+
+  const publicClient = createPublicClient({
+    chain: sepolia,
+    transport: http(RPC_URL),
+  });
+
+  let treasury = 0n;
+  let contractEth = 0n;
+  try {
+    treasury = await publicClient.readContract({
+      address: PUBLIC_SERVICE_ADDRESS,
+      abi: publicServiceAbi,
+      functionName: "treasuryBalance",
+    });
+    contractEth = await publicClient.getBalance({
+      address: PUBLIC_SERVICE_ADDRESS,
+    });
+  } catch {
+    // keep fallback zero values if RPC temporarily fails
+  }
+
+  const contractUrl = `https://sepolia.etherscan.io/address/${PUBLIC_SERVICE_ADDRESS}`;
+  return {
+    treasuryEth: formatEther(treasury),
+    contractEth: formatEther(contractEth),
+    contractAddress: PUBLIC_SERVICE_ADDRESS,
+    contractUrl,
+    readContractUrl: `${contractUrl}#readContract`,
   };
 }

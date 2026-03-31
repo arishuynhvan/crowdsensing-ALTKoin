@@ -144,7 +144,10 @@ export async function GET() {
               image_cids, score, status, timestamp, onchain_report_id, last_tx_hash
              , location_text, latitude, longitude
        FROM reports
-       ORDER BY score DESC, timestamp DESC`
+       ORDER BY
+         CASE WHEN status = 'Chờ kiểm duyệt' THEN 0 ELSE 1 END ASC,
+         score DESC,
+         timestamp DESC`
     )
     .all() as Array<{
     id: number;
@@ -384,12 +387,20 @@ export async function PATCH(req: NextRequest) {
         );
       }
       const decision = body?.decision as ResolveDecision;
+      const txHash = typeof body?.txHash === "string" ? body.txHash : null;
       if (decision !== "approve" && decision !== "reject") {
         return NextResponse.json({ error: "Quyết định không hợp lệ." }, { status: 400 });
       }
+      if (txHash && !/^0x[a-fA-F0-9]{64}$/.test(txHash)) {
+        return NextResponse.json({ error: "Tx hash resolve không hợp lệ." }, { status: 400 });
+      }
 
       const nextStatus = decision === "approve" ? "Chấp thuận" : "Từ chối";
-      db.prepare("UPDATE reports SET status = ? WHERE id = ?").run(nextStatus, reportId);
+      db.prepare("UPDATE reports SET status = ?, last_tx_hash = COALESCE(?, last_tx_hash) WHERE id = ?").run(
+        nextStatus,
+        txHash,
+        reportId
+      );
     } else {
       return NextResponse.json({ error: "Action không hợp lệ." }, { status: 400 });
     }

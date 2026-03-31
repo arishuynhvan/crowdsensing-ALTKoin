@@ -2,18 +2,13 @@
 
 import { useEffect, useState } from "react";
 import { Box, Heading, Text, VStack } from "@chakra-ui/react";
-import { getWallet } from "@/lib/api";
+import { getWallet, type WalletSummary } from "@/lib/api";
 import Header from "@/components/header";
 import Footer from "@/components/footer";
 import RoleGate from "@/components/roleGate";
 
-type WalletData = {
-  balance: number;
-  history: string[];
-};
-
 export default function WalletPage() {
-  const [wallet, setWallet] = useState<WalletData | null>(null);
+  const [wallet, setWallet] = useState<WalletSummary | null>(null);
 
   const loadData = async () => {
     const data = await getWallet();
@@ -40,7 +35,22 @@ export default function WalletPage() {
         ) : (
           <VStack align="stretch" spacing={3}>
             <Text>
-              <b>Số dư:</b> {wallet.balance}
+              <b>Ví:</b> {wallet.walletAddress ?? "N/A"}
+            </Text>
+            <Text>
+              <b>Số dư ví ngoài contract (ETH):</b> {wallet.walletEth}
+            </Text>
+            <Text>
+              <b>Stake yêu cầu (ETH):</b> {wallet.requiredStakeEth}
+            </Text>
+            <Text>
+              <b>Funding/stake đang giữ trong contract (ETH):</b> {wallet.citizenStakeEth}
+            </Text>
+            <Text>
+              <b>Trạng thái khóa:</b> {wallet.isLocked ? "Đang khóa" : "Bình thường"}
+            </Text>
+            <Text>
+              <b>Có thể gửi report:</b> {wallet.canSubmitReport ? "Có" : "Không"}
             </Text>
 
             <Text fontWeight="bold">Lịch sử:</Text>

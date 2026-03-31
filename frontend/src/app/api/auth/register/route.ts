@@ -142,7 +142,7 @@ export async function POST(req: NextRequest) {
       "function registerCitizen() payable",
     ]);
 
-    const fallbackStakeEth = process.env.NEXT_PUBLIC_STAKE_AMOUNT_ETH ?? "0.05";
+    const fallbackStakeEth = process.env.NEXT_PUBLIC_STAKE_AMOUNT_ETH ?? "0.00002";
     let stakeAmount: bigint;
     try {
       stakeAmount = await publicClient.readContract({

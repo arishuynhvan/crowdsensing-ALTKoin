@@ -30,8 +30,8 @@ export default function VotingPage() {
       const verified = apiData.filter(
         (r) =>
           typeof r.onchainReportId === "number" &&
-          Boolean(r.lastTxHash) &&
-          /^0x[a-fA-F0-9]{64}$/.test(r.lastTxHash ?? "")
+          r.onchainReportId >= 0 &&
+          r.status === "Chờ kiểm duyệt"
       );
       setReports(verified);
     } catch (err) {

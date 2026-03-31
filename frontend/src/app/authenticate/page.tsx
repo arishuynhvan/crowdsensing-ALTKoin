@@ -10,6 +10,8 @@ import RoleGate from "@/components/roleGate";
 export default function GovPage() {
   const [reports, setReports] = useState<ReportItem[]>([]);
   const [loadingId, setLoadingId] = useState<number | null>(null);
+  const [notice, setNotice] = useState("");
+  const [error, setError] = useState("");
 
   const loadData = async () => {
     const data = await getReports();
@@ -25,9 +27,17 @@ export default function GovPage() {
 
   const handleApprove = async (id: number) => {
     setLoadingId(id);
+    setNotice("");
+    setError("");
     try {
-      await approveReport(id);
+      const updated = await approveReport(id);
       await loadData();
+      setNotice(
+        `Đã duyệt báo cáo #${id} thành công. Smart contract đã resolve và phân phối quỹ/phạt. Tx: ${updated.lastTxHash ?? "N/A"}`
+      );
+    } catch (err) {
+      const message = err instanceof Error ? err.message : "Không thể duyệt báo cáo.";
+      setError(message);
     } finally {
       setLoadingId(null);
     }
@@ -35,9 +45,17 @@ export default function GovPage() {
 
   const handleReject = async (id: number) => {
     setLoadingId(id);
+    setNotice("");
+    setError("");
     try {
-      await rejectReport(id);
+      const updated = await rejectReport(id);
       await loadData();
+      setNotice(
+        `Đã từ chối báo cáo #${id} thành công. Smart contract đã resolve và phân phối quỹ/phạt. Tx: ${updated.lastTxHash ?? "N/A"}`
+      );
+    } catch (err) {
+      const message = err instanceof Error ? err.message : "Không thể từ chối báo cáo.";
+      setError(message);
     } finally {
       setLoadingId(null);
     }
@@ -50,6 +68,16 @@ export default function GovPage() {
 
       <Box maxW="900px" mx="auto" mt={6} w="100%" px={4} flex="1">
         <Heading mb={4}>🛠 Gov - Duyệt báo cáo</Heading>
+        {notice && (
+          <Text mb={3} color="green.600">
+            {notice}
+          </Text>
+        )}
+        {error && (
+          <Text mb={3} color="red.500">
+            {error}
+          </Text>
+        )}
 
         <VStack align="stretch" spacing={4}>
           {reports.map((r) => (

@@ -27,7 +27,18 @@ export default function ReportPage() {
     const loadReports = async () => {
         try {
             const data = await getReports();
-            setReports(data);
+            const user =
+                typeof window !== "undefined"
+                    ? JSON.parse(localStorage.getItem("user") || "{}")
+                    : null;
+            const reporter = user?.walletAddress || null;
+            setReports(
+                reporter
+                    ? data.filter(
+                          (r) => (r.reporter || "").toLowerCase() === reporter.toLowerCase()
+                      )
+                    : data
+            );
         } catch {
             // Keep UI usable even if API temporarily fails.
         }
@@ -51,6 +62,7 @@ export default function ReportPage() {
                 location: string | null;
                 latitude: number | null;
                 longitude: number | null;
+                submitted?: number | boolean | null;
             }>;
             const mapped: Draft[] = (data || []).map((d) => ({
                 id: d.id,
@@ -61,7 +73,7 @@ export default function ReportPage() {
                 location: d.location || "",
                 latitude: typeof d.latitude === "number" ? d.latitude : null,
                 longitude: typeof d.longitude === "number" ? d.longitude : null,
-                submitted: false,
+                submitted: d.submitted === 1 || d.submitted === true,
             }));
             setDrafts(mapped);
         } catch {
@@ -73,7 +85,19 @@ export default function ReportPage() {
         const init = async () => {
             try {
                 const data = await getReports();
-                setReports(data);
+                const user =
+                    typeof window !== "undefined"
+                        ? JSON.parse(localStorage.getItem("user") || "{}")
+                        : null;
+                const reporter = user?.walletAddress || null;
+                setReports(
+                    reporter
+                        ? data.filter(
+                              (r) =>
+                                  (r.reporter || "").toLowerCase() === reporter.toLowerCase()
+                          )
+                        : data
+                );
                 await loadDrafts();
             } catch {
                 // Keep UI usable even if API temporarily fails.

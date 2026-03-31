@@ -216,6 +216,7 @@ export default function ReportEditor({
             location: draft.location,
             latitude: draft.latitude,
             longitude: draft.longitude,
+            submitted: false,
           }),
         });
         const data = await res.json();
@@ -272,6 +273,29 @@ export default function ReportEditor({
       });
 
       setDraft((prev) => ({ ...prev, submitted: true }));
+
+      if (draft.id) {
+        const reporter = user?.walletAddress || user?.identifier;
+        if (reporter) {
+          await fetch("/api/drafts", {
+            method: "PUT",
+            headers: {
+              "Content-Type": "application/json",
+            },
+            body: JSON.stringify({
+              id: draft.id,
+              reporter,
+              content: draft.content,
+              image_cids: draft.cids,
+              location: draft.location,
+              latitude: draft.latitude,
+              longitude: draft.longitude,
+              submitted: true,
+            }),
+          });
+        }
+      }
+
       onSubmitSuccess?.({
         id: report.id,
         content: report.content,

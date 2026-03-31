@@ -26,6 +26,7 @@ db.exec(`
     location TEXT,
     latitude REAL,
     longitude REAL,
+    submitted INTEGER NOT NULL DEFAULT 0,
     updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
   )
 `);
@@ -35,6 +36,7 @@ const colNames = new Set(cols.map((c) => c.name));
 if (!colNames.has('location')) db.exec(`ALTER TABLE drafts ADD COLUMN location TEXT`);
 if (!colNames.has('latitude')) db.exec(`ALTER TABLE drafts ADD COLUMN latitude REAL`);
 if (!colNames.has('longitude')) db.exec(`ALTER TABLE drafts ADD COLUMN longitude REAL`);
+if (!colNames.has('submitted')) db.exec(`ALTER TABLE drafts ADD COLUMN submitted INTEGER NOT NULL DEFAULT 0`);
 
 // GET /api/drafts?reporter=<address> - Get all drafts for a reporter
 // GET /api/drafts?id=<id> - Get a single draft by id
@@ -53,7 +55,12 @@ export async function GET(req: NextRequest) {
   }
 
   if (reporter) {
-    const drafts = db.prepare('SELECT * FROM drafts WHERE reporter = ? ORDER BY updated_at DESC').all(reporter);
+    const includeSubmitted = searchParams.get('includeSubmitted') === 'true';
+    const drafts = includeSubmitted
+      ? db.prepare('SELECT * FROM drafts WHERE reporter = ? ORDER BY updated_at DESC').all(reporter)
+      : db
+          .prepare('SELECT * FROM drafts WHERE reporter = ? AND submitted = 0 ORDER BY updated_at DESC')
+          .all(reporter);
     return NextResponse.json(drafts);
   }
 
@@ -62,7 +69,7 @@ export async function GET(req: NextRequest) {
 
 // POST /api/drafts - Create a new draft
 export async function POST(req: NextRequest) {
-  const { reporter, content, image_cids, location, latitude, longitude } = await req.json();
+  const { reporter, content, image_cids, location, latitude, longitude, submitted } = await req.json();
 
   if (!reporter) {
     return NextResponse.json({ error: 'Reporter address is required' }, { status: 400 });
@@ -72,7 +79,7 @@ export async function POST(req: NextRequest) {
 
   try {
     const stmt = db.prepare(
-      'INSERT INTO drafts (reporter, content, image_cids, location, latitude, longitude) VALUES (?, ?, ?, ?, ?, ?)'
+      'INSERT INTO drafts (reporter, content, image_cids, location, latitude, longitude, submitted) VALUES (?, ?, ?, ?, ?, ?, ?)'
     );
     const info = stmt.run(
       reporter,
@@ -80,7 +87,8 @@ export async function POST(req: NextRequest) {
       imageCidsJson,
       location ?? null,
       typeof latitude === 'number' ? latitude : null,
-      typeof longitude === 'number' ? longitude : null
+      typeof longitude === 'number' ? longitude : null,
+      submitted ? 1 : 0
     );
 
     const newDraft = db.prepare('SELECT * FROM drafts WHERE id = ?').get(info.lastInsertRowid);
@@ -94,7 +102,7 @@ export async function POST(req: NextRequest) {
 
 // PUT /api/drafts - Update a draft
 export async function PUT(req: NextRequest) {
-  const { id, reporter, content, image_cids, location, latitude, longitude } = await req.json();
+  const { id, reporter, content, image_cids, location, latitude, longitude, submitted } = await req.json();
 
   if (!id || !reporter) {
     return NextResponse.json({ error: 'ID and reporter address are required' }, { status: 400 });
@@ -110,7 +118,7 @@ export async function PUT(req: NextRequest) {
 
   try {
     const stmt = db.prepare(
-      'UPDATE drafts SET content = ?, image_cids = ?, location = ?, latitude = ?, longitude = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?'
+      'UPDATE drafts SET content = ?, image_cids = ?, location = ?, latitude = ?, longitude = ?, submitted = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?'
     );
     stmt.run(
       content,
@@ -118,6 +126,7 @@ export async function PUT(req: NextRequest) {
       location ?? null,
       typeof latitude === 'number' ? latitude : null,
       typeof longitude === 'number' ? longitude : null,
+      submitted ? 1 : 0,
       id
     );
 

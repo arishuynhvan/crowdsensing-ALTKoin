@@ -27,12 +27,16 @@ export default function Header() {
 
     const navItems = useMemo(() => {
         if (role === "GOV") {
-            return [{ label: "Admin", path: "/admin" }];
+            return [
+                { label: "Admin", path: "/admin" },
+                { label: "Treasury", path: "/treasury" },
+            ];
         }
         return [
             { label: "Report", path: "/report" },
             { label: "Voting", path: "/voting" },
             { label: "Wallet", path: "/wallet" },
+            { label: "Treasury", path: "/treasury" },
         ];
     }, [role]);
 

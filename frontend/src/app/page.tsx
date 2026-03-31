@@ -3,6 +3,7 @@
 
 import { Box, VStack, Heading, Text, Button, Image } from "@chakra-ui/react";
 import { useRouter } from "next/navigation";
+import logo from "./logo.png";
 
 
 export default function Home() {
@@ -21,7 +22,7 @@ export default function Home() {
       <VStack spacing={6} textAlign="center">
         {/* Logo */}
         <Image
-          src="/logo.png"
+          src={logo.src}
           alt="App Logo"
           boxSize="120px"
           borderRadius="full"
